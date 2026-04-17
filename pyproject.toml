@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "helixobs"
+version = "0.1.0"
+description = "Entity-centric observability client for scientific instrument pipelines"
+requires-python = ">=3.11"
+dependencies = [
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.24",
+    "opentelemetry-semantic-conventions>=0.45b0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["helixobs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 10
