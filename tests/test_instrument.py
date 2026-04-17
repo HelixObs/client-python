@@ -130,7 +130,20 @@ class TestParentResolution:
 
         child_span = next(s for s in finished_spans(exporter) if s.name == "clustering")
         assert len(child_span.links) == 1
-        assert child_span.attributes["helix.parent.ids"] == "cand-cross"
+        # All parent entity IDs are in the attribute so the gateway can persist
+        # the full provenance DAG — not just the unresolved ones.
+        assert child_span.attributes["helix.parent.ids"] == "block-1,cand-cross"
+
+    def test_known_parent_also_in_parent_ids_attribute(self, instrument, exporter):
+        parent = instrument.track("correlator", id="block-1")
+        instrument.complete(parent)
+
+        child = instrument.track("classifier", id="cand-1", parents=["block-1"])
+        instrument.complete(child)
+
+        child_span = next(s for s in finished_spans(exporter) if s.name == "classifier")
+        assert len(child_span.links) == 1
+        assert child_span.attributes["helix.parent.ids"] == "block-1"
 
     def test_n_to_1_provenance(self, instrument, exporter):
         """N beam candidates → 1 astrophysical event."""

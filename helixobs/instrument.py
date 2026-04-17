@@ -228,8 +228,11 @@ class Instrument:
         span = self._tracer.start_span(stage_name, links=links)
         span.set_attribute(_ATTR_ENTITY_ID, id)
         span.set_attribute(_ATTR_INSTRUMENT_ID, self.instrument_id)
-        if unresolved:
-            span.set_attribute(_ATTR_PARENT_IDS, ",".join(unresolved))
+        # Always include all parent entity IDs so the gateway can persist the
+        # full provenance DAG in TimescaleDB, regardless of whether parents
+        # were resolved to span links in-process or not.
+        if parents:
+            span.set_attribute(_ATTR_PARENT_IDS, ",".join(parents))
 
         ctx = trace.set_span_in_context(span)
         ctx_token = context_api.attach(ctx)
