@@ -24,4 +24,11 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Test
-        run: pytest --tb=short
+        run: pytest --tb=short --cov=helixobs --cov-report=lcov:coverage.lcov
+
+      - name: Upload coverage to Coveralls
+        if: matrix.python-version == '3.11'
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: coverage.lcov
