@@ -99,6 +99,7 @@ def scrape_total(metric_name: str) -> float:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 @pytest.mark.e2e
+@pytest.mark.timeout(60)
 def test_entity_appears_in_db(instrument, db):
     entity_id = f"e2e-{uuid.uuid4().hex[:12]}"
     token = instrument.track("stage", id=entity_id)
@@ -110,6 +111,7 @@ def test_entity_appears_in_db(instrument, db):
 
 
 @pytest.mark.e2e
+@pytest.mark.timeout(60)
 def test_parent_ids_stored(instrument, db):
     parent_id = f"e2e-parent-{uuid.uuid4().hex[:12]}"
     child_id  = f"e2e-child-{uuid.uuid4().hex[:12]}"
@@ -131,6 +133,7 @@ def test_parent_ids_stored(instrument, db):
 
 
 @pytest.mark.e2e
+@pytest.mark.timeout(60)
 def test_entities_total_counter_increments(instrument, db):
     before = scrape_total("helix_entities_total")
     entity_id = f"e2e-counter-{uuid.uuid4().hex[:12]}"
@@ -143,10 +146,11 @@ def test_entities_total_counter_increments(instrument, db):
 
 
 @pytest.mark.e2e
+@pytest.mark.timeout(60)
 def test_error_event_recorded(instrument, db):
     entity_id = f"e2e-err-{uuid.uuid4().hex[:12]}"
     token = instrument.track("stage", id=entity_id)
-    instrument.error(token, "something went wrong")
+    instrument.error(token, {"message": "something went wrong"})
     instrument._provider.force_flush(timeout_millis=5_000)
 
     assert poll(lambda: entity_in_db(db, entity_id)), \
@@ -165,6 +169,7 @@ def test_error_event_recorded(instrument, db):
 
 
 @pytest.mark.e2e
+@pytest.mark.timeout(60)
 def test_n_to_1_provenance_chain(instrument, db):
     """Multiple candidates → one event: the N-to-1 provenance pattern."""
     block_id = f"e2e-block-{uuid.uuid4().hex[:12]}"
