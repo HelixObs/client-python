@@ -1,0 +1,51 @@
+name: E2E
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4   # client-python at ./
+
+      - name: Check out gateway repo
+        uses: actions/checkout@v4
+        with:
+          repository: HelixObs/gateway
+          path: gateway-repo
+
+      - name: Build gateway image
+        run: docker build -t helixobs-gateway gateway-repo/
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install client + e2e deps
+        run: pip install -e ".[e2e]"
+
+      - name: Start stack
+        run: |
+          GATEWAY_MIGRATIONS_DIR=${{ github.workspace }}/gateway-repo/migrations \
+            docker compose -f tests/e2e/docker-compose.yml up -d --wait
+        timeout-minutes: 10
+
+      - name: Run e2e tests
+        run: pytest -v -m e2e tests/e2e/
+        env:
+          GATEWAY_ENDPOINT: "localhost:4317"
+          METRICS_URL:      "http://localhost:2112/metrics"
+          TEST_DB_URL:      "host=localhost port=5432 dbname=helixobs user=helix password=helix sslmode=disable"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f tests/e2e/docker-compose.yml logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f tests/e2e/docker-compose.yml down -v

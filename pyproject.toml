@@ -41,6 +41,10 @@ dev = [
     "pytest-cov>=5.0",
     "pytest-timeout>=2.0",
 ]
+e2e = [
+    "pytest>=8.0",
+    "psycopg2-binary>=2.9",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -49,3 +53,7 @@ include = ["helixobs*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 timeout = 10
+norecursedirs = ["e2e"]
+markers = [
+    "e2e: end-to-end tests that require a running stack (deselect with -m 'not e2e')",
+]
