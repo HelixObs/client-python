@@ -1,19 +1,21 @@
 """Tests for helixobs.logging — log-record factory context injection."""
 
 import logging
+import os
 
 import pytest
 
-# Re-import resets the _installed guard for each test module load, but since
-# the factory is global we need to reset it between tests.
 import helixobs.logging as helix_logging
 
 
 @pytest.fixture(autouse=True)
-def reset_logging_factory():
+def reset_logging_factory(monkeypatch):
     """Restore the original log-record factory after each test."""
     original = logging.getLogRecordFactory()
     helix_logging._installed = False
+    # Ensure env vars used by the factory are absent unless a test sets them.
+    monkeypatch.delenv("GITHUB_REPO",    raising=False)
+    monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
     yield
     logging.setLogRecordFactory(original)
     helix_logging._installed = False
@@ -90,3 +92,76 @@ class TestFactoryInsideSpan:
         records.append(_make_record("outside"))
         assert records[0].otelTraceID != ""
         assert records[1].otelTraceID == ""
+
+
+class TestSourceLocation:
+    def test_src_tag_appended_to_message(self):
+        helix_logging.configure_logging()
+        record = _make_record("hello")
+        assert "  src=" in record.msg
+
+    def test_helix_source_attribute_set(self):
+        helix_logging.configure_logging()
+        record = _make_record("hello")
+        assert hasattr(record, "helixSource")
+        assert record.helixSource != ""
+
+    def test_src_contains_lineno(self):
+        helix_logging.configure_logging()
+        record = _make_record()
+        # record.lineno is 1 as set by _make_record
+        assert "#L1" in record.helixSource
+
+    def test_src_fallback_no_env_vars(self):
+        helix_logging.configure_logging()
+        record = _make_record()
+        # Without env vars, should be a plain path, not a URL
+        assert "github.com" not in record.helixSource
+
+    def test_src_github_permalink_when_env_vars_set(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_REPO",    "https://github.com/HelixObs/client-python")
+        monkeypatch.setenv("GIT_COMMIT_SHA", "abc123def456")
+        helix_logging.configure_logging()
+        record = _make_record()
+        assert record.helixSource.startswith(
+            "https://github.com/HelixObs/client-python/blob/abc123def456/"
+        )
+        assert "#L" in record.helixSource
+
+    def test_src_trailing_slash_stripped_from_repo_url(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_REPO",    "https://github.com/HelixObs/client-python/")
+        monkeypatch.setenv("GIT_COMMIT_SHA", "sha1")
+        helix_logging.configure_logging()
+        record = _make_record()
+        assert "//blob" not in record.helixSource
+
+    def test_record_args_cleared(self):
+        helix_logging.configure_logging()
+        record = _make_record("value=%s")
+        # args were () to begin with; factory must not break when args is empty
+        assert record.args is None
+
+    def test_message_preserved_in_msg(self):
+        helix_logging.configure_logging()
+        record = _make_record("pipeline started")
+        assert record.msg.startswith("pipeline started")
+
+
+class TestNormalizePath:
+    def test_site_packages_stripped(self):
+        path = "/usr/lib/python3.13/site-packages/helixobs/instrument.py"
+        result = helix_logging._normalize_path(path, "instrument.py")
+        assert result == "helixobs/instrument.py"
+
+    def test_relative_path_returned_for_local_file(self):
+        # Use a file that actually exists so relpath works deterministically.
+        abs_path = os.path.abspath(__file__)
+        result = helix_logging._normalize_path(abs_path, os.path.basename(abs_path))
+        assert not os.path.isabs(result)
+
+    def test_basename_fallback(self):
+        # Simulate a ValueError from os.path.relpath (Windows cross-drive).
+        import unittest.mock as mock
+        with mock.patch("os.path.relpath", side_effect=ValueError):
+            result = helix_logging._normalize_path("/some/abs/path/file.py", "file.py")
+        assert result == "file.py"
