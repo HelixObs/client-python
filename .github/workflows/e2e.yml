@@ -17,6 +17,7 @@ jobs:
         with:
           repository: HelixObs/gateway
           path: gateway-repo
+          token: ${{ secrets.GH_PAT }}
 
       - name: Build gateway image
         run: docker build -t helixobs-gateway gateway-repo/
