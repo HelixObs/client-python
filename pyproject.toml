@@ -6,12 +6,34 @@ build-backend = "setuptools.build_meta"
 name = "helixobs"
 version = "0.1.0"
 description = "Entity-centric observability client for scientific instrument pipelines"
+readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.11"
+authors = [
+    { name = "HelixObs", email = "hello@helixobs.io" },
+]
+keywords = ["observability", "opentelemetry", "science", "astronomy", "otel"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: System :: Monitoring",
+]
 dependencies = [
     "opentelemetry-sdk>=1.24",
     "opentelemetry-exporter-otlp-proto-grpc>=1.24",
     "opentelemetry-semantic-conventions>=0.45b0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/HelixObs/client-python"
+Repository = "https://github.com/HelixObs/client-python"
+Issues = "https://github.com/HelixObs/client-python/issues"
 
 [project.optional-dependencies]
 dev = [
