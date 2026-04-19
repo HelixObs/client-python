@@ -65,14 +65,12 @@ loki.source.docker "containers" {
 loki.process "helix_json" {
   stage.json {
     expressions = {
-      helix_entity_id     = "helix_entity_id",
       helix_instrument_id = "helix_instrument_id",
       level               = "level",
     }
   }
   stage.labels {
     values = {
-      helix_entity_id     = "",
       helix_instrument_id = "",
       level               = "",
     }
@@ -85,7 +83,9 @@ loki.write "default" {
 }
 ```
 
-Any collector that reads container stdout and forwards to Loki works: Promtail, Fluent Bit, Vector, or the OTel Collector with a `filelog` receiver. The contract is newline-delimited JSON on stdout with `helix_entity_id`, `helix_instrument_id`, and `level` as top-level string fields.
+Any collector that reads container stdout and forwards to Loki works: Promtail, Fluent Bit, Vector, or the OTel Collector with a `filelog` receiver. The contract is newline-delimited JSON on stdout with `helix_instrument_id` and `level` as top-level string fields.
+
+> **Note:** `helix_entity_id` is intentionally **not** a Loki stream label. Because each entity has a unique ID, using it as a label creates one stream per entity and quickly exhausts Loki's stream limit. Entity-scoped log queries use `| json | helix_entity_id = "..."` at query time instead.
 
 ---
 
@@ -146,8 +146,18 @@ An entity is any discrete data product your pipeline produces or consumes: a dat
 - An **instrument ID** stamped by the client library
 - A **provenance DAG** — the IDs of entities this one was derived from
 - **Metadata** — arbitrary key/value attributes attached at any point
-- An **OTel trace** — the distributed span tree for the processing pipeline
-- **Logs** — all log lines emitted while the entity's span was active
+- A **creation trace** — the OTel span tree from when the entity was first tracked
+- **Operation traces** — independent traces for each post-creation operation (see below)
+- **Events** — `helix.*` span events attached across any trace
+- **Logs** — all log lines emitted while any of the entity's spans are active
+
+### Entity Operations
+
+Some work happens on an entity *after* its creation trace has ended — often asynchronously and in separate processes. Examples: converting an FRB event to HDF5, registering it in a catalog, replicating it to offsite storage.
+
+These are not new entities. They are **operations on an existing entity**, each running in their own independent OTel trace. The Entity Inspector shows all traces associated with an entity — the creation trace plus every operation trace — so you can drill into each one separately.
+
+Use `tel.operate()` for these cases (see API Reference). If the entity does not yet exist when an operation arrives at the gateway, a placeholder entity is created automatically with default values.
 
 ### Instrument
 
@@ -257,6 +267,67 @@ span.add_event("helix.event.voevent_issued", {
 
 ---
 
+### `tel.child_span(name, *, parent_id=None, attributes=None)`
+
+Create a child span within an entity's current trace **without registering a new entity**. Use for internal sub-steps that should appear in Tempo's span tree (e.g. RFI mitigation, dedispersion, per-beam clustering) but don't need their own provenance node.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | `str` | Span name shown in Tempo |
+| `parent_id` | `str \| None` | Entity ID to parent to. Works even after that entity's token is completed. Defaults to the current active context. |
+| `attributes` | `dict \| None` | OTel span attributes to set immediately |
+
+```python
+with tel.child_span("rfi-mitigation") as span:
+    n_flagged = excise_rfi(data)
+    span.set_attribute("helix.chime.rfi_flagged_channels", n_flagged)
+    log.info(f"RFI mitigation: {n_flagged} channels excised")
+
+# Parent to a completed entity from a different thread
+with tel.child_span("ring-buffer-rpc", parent_id=event_id) as span:
+    data = fetch_ring_buffer()
+    span.set_attribute("helix.chime.buffer_size_mb", len(data) / 1e6)
+```
+
+---
+
+### `tel.operate(operation, *, entity_id) → context manager`
+
+Start an **independent trace** for an operation performed on an existing entity. Unlike `child_span()`, this opens a new root trace — the operation is not a child of the entity's creation trace. The gateway writes an `entity_operations` row so the Entity Inspector shows all traces for that entity across its lifetime.
+
+Yields an `_OperationHandle` with `set_attribute()`, `add_event()`, and `fail()`.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `operation` | `str` | Operation name shown in Tempo and the Trace panel |
+| `entity_id` | `str` | ID of the existing entity being operated on |
+
+```python
+with tel.operate("hdf5-conversion", entity_id=event_id) as op:
+    op.set_attribute("helix.chime.hdf5_size_mb", size_mb)
+    if write_failed:
+        log.error("HDF5 write failed: disk full")
+        op.fail("hdf5_write_error")     # records helix.error event + sets span ERROR
+        return None
+    log.info(f"HDF5 written: {size_mb:.1f} MB")
+```
+
+Unhandled exceptions inside the `with` block automatically mark the operation as failed.
+
+If the entity does not exist yet (race condition or late arrival), the gateway creates a minimal placeholder entity so the operation is never orphaned.
+
+---
+
+### `_OperationHandle` (yielded by `operate()`)
+
+| Method | Description |
+|---|---|
+| `set_attribute(key, value)` | Set a span attribute on the operation span |
+| `add_event(name, attributes=None)` | Attach a `helix.*` span event (written to `entity_events`) |
+| `fail(message)` | Record `helix.error` event and mark span as ERROR |
+
+---
+
 ### `tel.shutdown()`
 
 Flush all pending spans and shut down the OTLP exporter. Call at process exit to avoid losing the last batch.
@@ -340,6 +411,50 @@ Best when one function maps cleanly to one pipeline stage and its arguments carr
 )
 def cluster_event(cands: list[Candidate]) -> FRBEvent:
     return run_clustering(cands)
+```
+
+### Internal sub-steps with `child_span()`
+
+Use `child_span()` for work that belongs inside one entity's trace — it appears in Tempo as a nested span but creates no DB entity row.
+
+```python
+token = tel.track("l1-search", id=beam_id, parents=[block_id])
+
+with tel.child_span("rfi-mitigation") as span:
+    n = excise_rfi(data)
+    span.set_attribute("helix.chime.rfi_flagged_channels", n)
+
+with tel.child_span("dedispersion") as span:
+    trials = run_dedispersion(data)
+    span.set_attribute("helix.chime.dm_trials", trials)
+
+tel.complete(token)
+```
+
+### Post-creation operations with `operate()`
+
+Use `operate()` for work that happens on an entity after its creation trace has ended — even asynchronously in a separate process.
+
+```python
+# These run after the FRB event entity is fully created and its trace is closed.
+# Each gets its own independent trace, all linked to the same event_id.
+
+with tel.operate("hdf5-conversion", entity_id=event_id) as op:
+    size_mb = write_hdf5(event_id)
+    op.set_attribute("helix.chime.hdf5_size_mb", size_mb)
+    log.info(f"HDF5 written: {size_mb:.1f} MB")
+
+with tel.operate("registration", entity_id=event_id) as op:
+    register_in_catalog(event_id)
+    op.set_attribute("helix.chime.registration_status", "ok")
+    log.info("event registered")
+
+for dest in ["cedar", "niagara"]:
+    with tel.operate("replication", entity_id=event_id) as op:
+        op.set_attribute("helix.chime.replication_dest", dest)
+        if not replicate_to(dest):
+            log.error(f"replication to {dest} failed")
+            op.fail("replication_timeout")
 ```
 
 ### Multi-stage pipeline
@@ -427,6 +542,8 @@ Fields with empty values are omitted from the output to keep lines short.
 
 ### entity_events table
 
+One row per `helix.*` span event, from any trace associated with the entity (creation or operation).
+
 | Column | Type | Description |
 |---|---|---|
 | `entity_id` | TEXT | References entities.id |
@@ -435,6 +552,22 @@ Fields with empty values are omitted from the output to keep lines short.
 | `timestamp_ns` | BIGINT | When the event occurred (from OTel span event) |
 | `metadata` | JSONB | Event attributes from `span.add_event(name, attributes)` |
 | `created_at` | TIMESTAMPTZ | Wall-clock insert time |
+
+### entity_operations table
+
+One row per `tel.operate()` call. Links independent post-creation traces back to their entity.
+
+| Column | Type | Description |
+|---|---|---|
+| `entity_id` | TEXT | The entity being operated on |
+| `instrument_id` | TEXT | Instrument identifier |
+| `operation` | TEXT | Operation name (e.g. `hdf5-conversion`, `registration`, `replication`) |
+| `trace_id` | TEXT | OTel trace ID for this operation — click to open in Tempo |
+| `timestamp_ns` | BIGINT | Operation start time in nanoseconds |
+| `metadata` | JSONB | Span attributes set inside the `operate()` block |
+| `created_at` | TIMESTAMPTZ | Wall-clock insert time |
+
+An entity can have any number of operation rows — there is no uniqueness constraint on `(entity_id, operation)`.
 
 Data is retained for 90 days and auto-compressed after 7 days (TimescaleDB policies).
 

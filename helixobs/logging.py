@@ -117,7 +117,7 @@ def _install_factory() -> None:
     _factory_installed = True
 
     github_repo    = os.environ.get("GITHUB_REPO", "").rstrip("/")
-    git_commit_sha = os.environ.get("GIT_COMMIT_SHA", "")
+    git_ref        = os.environ.get("GIT_COMMIT_SHA") or os.environ.get("GIT_BRANCH", "main")
 
     _prev = logging.getLogRecordFactory()
 
@@ -140,8 +140,8 @@ def _install_factory() -> None:
             record.helixInstrumentID = ""
 
         rel = _normalize_path(record.pathname, record.filename)
-        if github_repo and git_commit_sha:
-            record.helixSource = f"{github_repo}/blob/{git_commit_sha}/{rel}#L{record.lineno}"
+        if github_repo:
+            record.helixSource = f"{github_repo}/blob/{git_ref}/{rel}#L{record.lineno}"
         else:
             record.helixSource = f"{rel}#L{record.lineno}"
 

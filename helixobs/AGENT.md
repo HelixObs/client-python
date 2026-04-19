@@ -4,22 +4,33 @@ Core library code. Entry point is `Instrument` in `instrument.py`.
 
 ## Files
 
-- **instrument.py** — `Instrument`, `Token`, `_StageHelper`. All pipeline-facing API lives here.
-- **_store.py** — `TraceStore`: thread-safe bounded dict mapping `entity_id → SpanContext`. Used to resolve in-process parents into OTel `Link`s.
+- **instrument.py** — `Instrument`, `Token`, `_StageHelper`, `_OperationHandle`. All pipeline-facing API lives here.
+- **_store.py** — `TraceStore`: thread-safe bounded dict mapping `entity_id → SpanContext`. Used to resolve in-process parents into OTel `Link`s. Operations do NOT overwrite entity entries here.
 - **logging.py** — `configure_logging()`: installs a log-record factory that injects `otelTraceID`, `otelSpanID`, `helixEntityID`, `helixInstrumentID` into every log record while a span is active.
 - **chime/** — `CHIMEInstrument` subclass + CHIME semantic convention attribute constants.
 
 ## Attribute contract with the gateway
 
-The gateway extracts these three attributes from every incoming span:
+The gateway extracts these attributes from every incoming span:
 
 ```
-helix.entity.id       string   entity ID
-helix.instrument.id   string   instrument identifier
-helix.parent.ids      string   comma-separated unresolved parent IDs (optional)
+helix.entity.id          string   entity ID (required — triggers HelixObs processing)
+helix.instrument.id      string   instrument identifier
+helix.parent.ids         string   comma-separated unresolved parent IDs (optional)
+helix.entity.is_operation string  "true" → write entity_operations row, not entities row
 ```
 
-Do not rename these without updating the gateway interceptor.
+Do not rename these without updating the gateway interceptor constants (`attrEntityID`, etc.).
+
+## Entity vs Operation
+
+| | `track()` / `stage()` | `operate()` |
+|---|---|---|
+| Creates entity row | Yes | No (upserts placeholder if missing) |
+| Creates operation row | No | Yes |
+| Overwrites TraceStore | Yes | No |
+| OTel trace | New root (or linked) | New root (always blank context) |
+| Use when | Entity comes into being | Work done on an existing entity |
 
 ## Adding new integration layers or helpers
 

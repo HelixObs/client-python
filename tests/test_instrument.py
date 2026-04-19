@@ -300,3 +300,104 @@ class TestAddEvent:
         span = finished_spans(exporter)[0]
         evt = next(e for e in span.events if e.name == "helix.event.archived")
         assert evt.attributes["checksum"] == "abc123"
+
+
+# ── operate() context manager ────────────────────────────────────────────────
+
+class TestOperate:
+    def test_operate_produces_finished_span(self, instrument, exporter):
+        with instrument.operate("hdf5-conversion", entity_id="frb-001"):
+            pass
+        spans = finished_spans(exporter)
+        assert len(spans) == 1
+        assert spans[0].name == "hdf5-conversion"
+
+    def test_operate_sets_is_operation_attribute(self, instrument, exporter):
+        with instrument.operate("hdf5-conversion", entity_id="frb-001"):
+            pass
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("helix.entity.is_operation") == "true"
+
+    def test_operate_sets_entity_id_attribute(self, instrument, exporter):
+        with instrument.operate("hdf5-conversion", entity_id="frb-001"):
+            pass
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("helix.entity.id") == "frb-001"
+
+    def test_operate_sets_instrument_id_attribute(self, instrument, exporter):
+        with instrument.operate("registration", entity_id="frb-002"):
+            pass
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("helix.instrument.id") == "TEST"
+
+    def test_operate_creates_new_root_trace(self, instrument, exporter):
+        token = instrument.track("clustering", id="frb-003")
+        instrument.complete(token)
+        entity_span = finished_spans(exporter)[0]
+
+        with instrument.operate("hdf5-conversion", entity_id="frb-003"):
+            pass
+        op_span = finished_spans(exporter)[1]
+
+        assert op_span.context.trace_id != entity_span.context.trace_id
+
+    def test_operate_does_not_overwrite_store(self, instrument, exporter):
+        """Entity created before an operation must still be resolvable as parent."""
+        token = instrument.track("clustering", id="frb-004")
+        instrument.complete(token)
+        entity_ctx = token._span.get_span_context()
+
+        with instrument.operate("hdf5-conversion", entity_id="frb-004"):
+            pass
+
+        # A child tracking frb-004 as parent should still link to the original entity span.
+        child = instrument.track("archiving", id="archive-1", parents=["frb-004"])
+        instrument.complete(child)
+
+        child_span = next(s for s in finished_spans(exporter) if s.name == "archiving")
+        assert len(child_span.links) == 1
+        assert child_span.links[0].context.trace_id == entity_ctx.trace_id
+        assert child_span.links[0].context.span_id == entity_ctx.span_id
+
+    def test_operate_handle_set_attribute(self, instrument, exporter):
+        with instrument.operate("hdf5-conversion", entity_id="frb-005") as op:
+            op.set_attribute("helix.chime.hdf5_size_mb", "241.3")
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("helix.chime.hdf5_size_mb") == "241.3"
+
+    def test_operate_handle_add_event(self, instrument, exporter):
+        with instrument.operate("hdf5-conversion", entity_id="frb-006") as op:
+            op.add_event("helix.event.checkpoint", {"step": "written"})
+        span = finished_spans(exporter)[0]
+        assert any(e.name == "helix.event.checkpoint" for e in span.events)
+
+    def test_operate_handle_fail_adds_helix_error_event(self, instrument, exporter):
+        with instrument.operate("hdf5-conversion", entity_id="frb-007") as op:
+            op.fail("disk_full")
+        span = finished_spans(exporter)[0]
+        assert any(e.name == "helix.error" for e in span.events)
+
+    def test_operate_handle_fail_sets_error_message(self, instrument, exporter):
+        with instrument.operate("hdf5-conversion", entity_id="frb-008") as op:
+            op.fail("disk_full")
+        span = finished_spans(exporter)[0]
+        err_event = next(e for e in span.events if e.name == "helix.error")
+        assert err_event.attributes.get("message") == "disk_full"
+
+    def test_operate_handle_fail_sets_error_status(self, instrument, exporter):
+        with instrument.operate("hdf5-conversion", entity_id="frb-009") as op:
+            op.fail("disk_full")
+        span = finished_spans(exporter)[0]
+        assert span.status.status_code == StatusCode.ERROR
+
+    def test_operate_unhandled_exception_marks_error(self, instrument, exporter):
+        with pytest.raises(RuntimeError):
+            with instrument.operate("hdf5-conversion", entity_id="frb-010"):
+                raise RuntimeError("write_timeout")
+        span = finished_spans(exporter)[0]
+        assert span.status.status_code == StatusCode.ERROR
+
+    def test_operate_exception_is_not_suppressed(self, instrument):
+        with pytest.raises(ValueError):
+            with instrument.operate("registration", entity_id="frb-011"):
+                raise ValueError("voevent_parse_error")

@@ -60,9 +60,10 @@ from opentelemetry.trace import Link, NonRecordingSpan, StatusCode
 from ._store import TraceStore
 
 # Canonical span attribute names — must match what the gateway extracts.
-_ATTR_ENTITY_ID    = "helix.entity.id"
+_ATTR_ENTITY_ID     = "helix.entity.id"
 _ATTR_INSTRUMENT_ID = "helix.instrument.id"
-_ATTR_PARENT_IDS   = "helix.parent.ids"   # comma-separated; cross-process fallback
+_ATTR_PARENT_IDS    = "helix.parent.ids"    # comma-separated; cross-process fallback
+_ATTR_IS_OPERATION  = "helix.entity.is_operation"
 
 
 # ── Token ─────────────────────────────────────────────────────────────────────
@@ -142,6 +143,29 @@ class _StageHelper:
                 self._instrument.error(token, metadata={"exception.message": str(exc)})
                 raise
         return wrapper
+
+
+# ── _OperationHandle ──────────────────────────────────────────────────────────
+
+class _OperationHandle:
+    """
+    Yielded by Instrument.operate().  Wraps the underlying OTel span so callers
+    don't need to import opentelemetry directly.
+    """
+
+    def __init__(self, span) -> None:
+        self._span = span
+
+    def set_attribute(self, key: str, value) -> None:
+        self._span.set_attribute(key, str(value))
+
+    def add_event(self, name: str, attributes: dict | None = None) -> None:
+        self._span.add_event(name, attributes=attributes or {})
+
+    def fail(self, message: str = "operation failed") -> None:
+        """Mark this operation as failed."""
+        self._span.set_status(StatusCode.ERROR)
+        self._span.add_event("helix.error", attributes={"message": message})
 
 
 # ── Instrument ────────────────────────────────────────────────────────────────
@@ -302,6 +326,42 @@ class Instrument:
                 for k, v in attributes.items():
                     span.set_attribute(k, v)
             yield span
+
+    # ── Entity operations (new independent trace on an existing entity) ──
+
+    @contextmanager
+    def operate(self, operation: str, *, entity_id: str):
+        """
+        Start an independent trace for an operation performed on an existing
+        entity.  The entity must already exist.  Records an entity_operation
+        row in the DB (not a new entity row) so the Entity Inspector can show
+        all traces associated with one entity across its lifetime.
+
+        Yields an _OperationHandle for attribute-setting and failure recording.
+        Unhandled exceptions automatically mark the operation as failed.
+
+        Example::
+
+            with tel.operate("hdf5-conversion", entity_id=event_id) as op:
+                op.set_attribute("helix.chime.hdf5_size_mb", size_mb)
+                if failure:
+                    op.fail("hdf5_write_error")
+                    return None
+        """
+        with self._tracer.start_as_current_span(
+            operation,
+            context=context_api.Context(),  # blank context → new root trace
+        ) as span:
+            span.set_attribute(_ATTR_ENTITY_ID, entity_id)
+            span.set_attribute(_ATTR_INSTRUMENT_ID, self.instrument_id)
+            span.set_attribute(_ATTR_IS_OPERATION, "true")
+            handle = _OperationHandle(span)
+            try:
+                yield handle
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_status(StatusCode.ERROR)
+                raise
 
     # ── Layer 1 + 2 — stage() ─────────────────────────────────────────
 

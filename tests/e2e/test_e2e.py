@@ -170,6 +170,78 @@ def test_error_event_recorded(instrument, db):
 
 @pytest.mark.e2e
 @pytest.mark.timeout(60)
+def test_operate_creates_operation_row(instrument, db):
+    entity_id = f"e2e-op-{uuid.uuid4().hex[:12]}"
+    token = instrument.track("clustering", id=entity_id)
+    instrument.complete(token)
+    instrument._provider.force_flush(timeout_millis=5_000)
+
+    with instrument.operate("hdf5-conversion", entity_id=entity_id) as op:
+        op.set_attribute("helix.chime.hdf5_size_mb", "199.0")
+    instrument._provider.force_flush(timeout_millis=5_000)
+
+    def operation_in_db():
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM entity_operations WHERE entity_id = %s AND operation = %s",
+                (entity_id, "hdf5-conversion"),
+            )
+            return cur.fetchone() is not None
+
+    assert poll(operation_in_db), \
+        f"entity_operation row not found for entity {entity_id!r}"
+
+
+@pytest.mark.e2e
+@pytest.mark.timeout(60)
+def test_operate_fail_records_error_event(instrument, db):
+    entity_id = f"e2e-opfail-{uuid.uuid4().hex[:12]}"
+    token = instrument.track("clustering", id=entity_id)
+    instrument.complete(token)
+    instrument._provider.force_flush(timeout_millis=5_000)
+
+    with instrument.operate("registration", entity_id=entity_id) as op:
+        op.fail("voevent_timeout")
+    instrument._provider.force_flush(timeout_millis=5_000)
+
+    def error_event_in_db():
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM entity_events WHERE entity_id = %s AND event_name = 'helix.error'",
+                (entity_id,),
+            )
+            return cur.fetchone() is not None
+
+    assert poll(error_event_in_db), \
+        f"helix.error event not found for operation on {entity_id!r}"
+
+
+@pytest.mark.e2e
+@pytest.mark.timeout(60)
+def test_operate_on_nonexistent_entity_creates_placeholder(instrument, db):
+    entity_id = f"e2e-phantom-{uuid.uuid4().hex[:12]}"
+
+    with instrument.operate("hdf5-conversion", entity_id=entity_id) as op:
+        op.set_attribute("helix.chime.hdf5_size_mb", "50.0")
+    instrument._provider.force_flush(timeout_millis=5_000)
+
+    assert poll(lambda: entity_in_db(db, entity_id)), \
+        f"placeholder entity not created for {entity_id!r}"
+
+    def operation_in_db():
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM entity_operations WHERE entity_id = %s",
+                (entity_id,),
+            )
+            return cur.fetchone() is not None
+
+    assert poll(operation_in_db), \
+        f"entity_operation row not found for phantom entity {entity_id!r}"
+
+
+@pytest.mark.e2e
+@pytest.mark.timeout(60)
 def test_n_to_1_provenance_chain(instrument, db):
     """Multiple candidates → one event: the N-to-1 provenance pattern."""
     block_id = f"e2e-block-{uuid.uuid4().hex[:12]}"

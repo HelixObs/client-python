@@ -84,6 +84,53 @@ def classify_candidate(cand):
     return run_classifier(cand)
 ```
 
+## Internal sub-steps with `child_span()`
+
+Use `child_span()` for work that belongs inside one entity's trace — RFI mitigation, dedispersion, per-beam clustering — without registering a new entity. Sub-steps appear in Tempo as nested spans.
+
+```python
+token = tel.track("l1-search", id=beam_id, parents=[block_id])
+
+with tel.child_span("rfi-mitigation") as span:
+    n = excise_rfi(data)
+    span.set_attribute("helix.chime.rfi_flagged_channels", n)
+    log.info(f"RFI mitigation: {n} channels excised")
+
+with tel.child_span("dedispersion") as span:
+    dm_trials = run_dedispersion(data)
+    span.set_attribute("helix.chime.dm_trials", dm_trials)
+
+tel.complete(token)
+```
+
+## Post-creation operations with `operate()`
+
+Some work happens on an entity after its creation trace has ended — often asynchronously in separate processes. These are not new entities; they are **operations on an existing entity**, each with their own independent OTel trace. The Entity Inspector shows all traces for an entity across its lifetime.
+
+```python
+# After the FRB event entity is created and its detection trace is closed:
+
+with tel.operate("hdf5-conversion", entity_id=event_id) as op:
+    size_mb = write_hdf5(event_id)
+    op.set_attribute("helix.chime.hdf5_size_mb", size_mb)
+    if failed:
+        log.error("HDF5 write failed: disk full")
+        op.fail("hdf5_write_error")   # records helix.error event + sets span ERROR
+        return
+
+with tel.operate("registration", entity_id=event_id) as op:
+    register_in_catalog(event_id)
+    log.info("event registered")
+
+for dest in ["cedar", "niagara"]:
+    with tel.operate("replication", entity_id=event_id) as op:
+        op.set_attribute("helix.chime.replication_dest", dest)
+        replicate_to(dest)
+        log.info(f"replicated to {dest}")
+```
+
+If the entity doesn't exist when an operation arrives (race condition or late arrival), the gateway creates a minimal placeholder automatically.
+
 ## N-to-1 provenance
 
 The defining feature of HelixObs: a single entity can have multiple parents from independent processing chains. Standard OTel tracing can't model this.
