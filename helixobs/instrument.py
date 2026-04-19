@@ -43,7 +43,11 @@ attribute; the gateway resolves them server-side.
 """
 
 import functools
+import logging
+from contextlib import contextmanager
 from typing import Callable, Union
+
+_log = logging.getLogger("helixobs.instrument")
 
 from opentelemetry import context as context_api
 from opentelemetry import trace
@@ -51,7 +55,7 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Link, StatusCode
+from opentelemetry.trace import Link, NonRecordingSpan, StatusCode
 
 from ._store import TraceStore
 
@@ -259,8 +263,45 @@ class Instrument:
         attrs = {k: str(v) for k, v in (metadata or {}).items()}
         token._span.add_event("helix.error", attributes=attrs)
         token._span.set_status(StatusCode.ERROR)
+        # Emit a structured log while the span context is still attached so
+        # the factory injects helix_entity_id and otel_trace_id automatically.
+        _log.error(attrs.get("message", "entity error"))
         context_api.detach(token._ctx_token)
         token._span.end()
+
+    # ── Child spans (internal pipeline steps, no entity registration) ──
+
+    @contextmanager
+    def child_span(
+        self,
+        name: str,
+        *,
+        parent_id: str | None = None,
+        attributes: dict | None = None,
+    ):
+        """
+        Create a child span within an entity's trace without registering a
+        new HelixObs entity.  Use for internal pipeline steps that should
+        appear in Tempo's span tree but don't need provenance tracking.
+
+        If parent_id is given, the span is parented to that entity's stored
+        SpanContext (works even after the entity token has been completed).
+        If omitted, the span is parented to the current active context.
+        """
+        if parent_id is not None:
+            span_ctx = self._store.get(parent_id)
+            ctx = (
+                trace.set_span_in_context(NonRecordingSpan(span_ctx))
+                if span_ctx is not None
+                else context_api.get_current()
+            )
+        else:
+            ctx = context_api.get_current()
+        with self._tracer.start_as_current_span(name, context=ctx) as span:
+            if attributes:
+                for k, v in attributes.items():
+                    span.set_attribute(k, v)
+            yield span
 
     # ── Layer 1 + 2 — stage() ─────────────────────────────────────────
 
