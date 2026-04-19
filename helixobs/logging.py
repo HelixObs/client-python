@@ -107,14 +107,14 @@ def _normalize_path(pathname: str, filename: str) -> str:
 
 # ── Factory ───────────────────────────────────────────────────────────────────
 
-_factory_installed = False
+_installed = False
 
 
 def _install_factory() -> None:
-    global _factory_installed
-    if _factory_installed:
+    global _installed
+    if _installed:
         return
-    _factory_installed = True
+    _installed = True
 
     github_repo    = os.environ.get("GITHUB_REPO", "").rstrip("/")
     git_ref        = os.environ.get("GIT_COMMIT_SHA") or os.environ.get("GIT_BRANCH", "main")
@@ -144,6 +144,9 @@ def _install_factory() -> None:
             record.helixSource = f"{github_repo}/blob/{git_ref}/{rel}#L{record.lineno}"
         else:
             record.helixSource = f"{rel}#L{record.lineno}"
+
+        record.msg = f"{record.msg}  src={record.helixSource}"
+        record.args = None
 
         return record
 
