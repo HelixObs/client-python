@@ -27,9 +27,13 @@ Your pipeline process connects to a single endpoint. The full HelixObs stack run
 | Requirement | Details |
 |---|---|
 | **HelixObs Gateway** | gRPC endpoint (default `localhost:4317`). Every `track()`/`complete()`/`error()` call sends an OTLP span here. |
-| **Log collector sidecar** | Reads your process's stdout, parses JSON, and ships logs to Loki. Grafana Alloy is the reference implementation (see below). Any collector that reads container stdout works. |
+| **Log delivery** | Choose one of two modes — see below. |
 
-> **That's it.** Your pipeline process makes no HTTP calls, no database connections, and no direct Loki calls. All telemetry flows through gRPC spans + structured stdout.
+**Sidecar mode (default):** Write JSON to stdout; Grafana Alloy (or any log collector) tails the container and ships to Loki. Zero extra dependencies.
+
+**OTLP mode (greenfield services):** Call `configure_logging(otlp=True)`. Logs are shipped directly to the OTel Collector over the same gRPC connection used for traces — no sidecar required. The collector's `logs` pipeline forwards them to Loki.
+
+> **In both modes** your pipeline process makes no HTTP calls and no direct Loki calls. All telemetry flows through gRPC.
 
 ### HelixObs stack components
 
@@ -39,12 +43,12 @@ The following services must be running for the full UI to work. All are included
 |---|---|---|
 | **HelixObs Gateway** | Receives OTLP spans, writes entities + events to TimescaleDB, forwards traces to OTel Collector | `4317` (gRPC) |
 | **TimescaleDB** | Stores entities, parent DAG, and entity events. Source for Grafana PostgreSQL panels. | `5432` |
-| **OTel Collector** | Receives forwarded traces from gateway, exports to Tempo | internal |
+| **OTel Collector** | Receives forwarded traces (and optionally logs) from gateway, exports to Tempo / Loki | internal |
 | **Tempo** | Distributed trace storage. Source for Grafana span tree panels. | `3201` |
-| **Loki** | Log aggregation. Receives logs from the sidecar collector. | `3101` |
+| **Loki** | Log aggregation. Receives logs from the sidecar collector **or** the OTel Collector logs pipeline. | `3101` |
 | **Prometheus** | Scrapes `helix_events_total` and other metrics from the gateway. | `9091` |
 | **Grafana** | Dashboard UI — Entity Inspector, Error Entities, custom dashboards. | `3001` |
-| **Log collector sidecar** | Reads container stdout, extracts JSON fields, ships to Loki as stream labels. Reference: Grafana Alloy. | internal |
+| **Log collector sidecar** | _(sidecar mode only)_ Reads container stdout, extracts JSON fields, ships to Loki as stream labels. Reference: Grafana Alloy. | internal |
 
 ### Log collector sidecar (Grafana Alloy reference config)
 
@@ -339,22 +343,34 @@ atexit.register(tel.shutdown)
 
 ---
 
-### `configure_logging()`  _(helixobs.logging)_
+### `configure_logging(*, otlp=False)`  _(helixobs.logging)_
 
-Install the helix log-record factory and JSON formatter on the root logger. Call once at startup, before any `logging.getLogger()` calls.
+Install the helix log-record factory and attach log handlers on the root logger. Call once at startup, before any `logging.getLogger()` calls.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `otlp` | `bool` | `False` | When `True`, ship logs via OTLP gRPC to the OTel Collector instead of writing JSON to stdout. |
+
+**Sidecar mode (default):** logs go to stdout as newline-delimited JSON. A Grafana Alloy sidecar (or any log collector) picks them up and ships to Loki.
 
 ```python
 from helixobs.logging import configure_logging
-configure_logging()
+configure_logging()          # stdout JSON — Alloy sidecar required
 ```
 
-Every log line becomes a single-line JSON object written to stdout:
+**OTLP mode:** logs are shipped directly to the OTel Collector over gRPC on the same port as traces (`OTEL_EXPORTER_OTLP_ENDPOINT`, default `http://localhost:4317`). No sidecar required. Use this for greenfield services.
+
+```python
+configure_logging(otlp=True) # OTLP gRPC → OTel Collector → Loki
+```
+
+In both modes every log line carries the same helix context fields (populated from the active OTel span):
 
 ```json
 {"ts": "2026-04-18T12:00:01", "level": "info", "logger": "chime.simulator", "msg": "candidate classified", "helix_entity_id": "cand-abc123", "helix_instrument_id": "CHIME", "otel_trace_id": "abc...", "otel_span_id": "def..."}
 ```
 
-Fields are auto-populated from the active OTel span — **log while the span is active** (before `complete()`/`error()`) to capture entity context.
+**Log while the span is active** (before `complete()`/`error()`) to capture entity context.
 
 Optional environment variables for GitHub source links:
 
@@ -487,7 +503,7 @@ The gateway stores `parent_ids` for each entity, enabling the recursive provenan
 
 ## 7. Structured Logging
 
-`configure_logging()` installs a JSON formatter. Every `logging` call on any logger emits a JSON object to stdout. No configuration required beyond the one-time call.
+`configure_logging()` installs a JSON formatter. Every `logging` call on any logger emits a JSON object — written to stdout in sidecar mode, or shipped via OTLP gRPC in OTLP mode. No configuration required beyond the one-time call.
 
 **Log while the span is active** to capture entity context automatically:
 
