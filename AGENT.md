@@ -32,6 +32,7 @@ tests/
 - **Parent resolution**: known parents (same process) → OTel `Link`s. Unknown parents (cross-process) → `helix.parent.ids` comma-separated attribute; gateway resolves server-side.
 - **Entity operations**: `operate()` starts a new root trace (blank OTel context) for post-creation work on an existing entity. The gateway detects `helix.entity.is_operation = "true"` and writes to `entity_operations` instead of `entities`. The entity's TraceStore entry is never overwritten by an operation.
 - **Log factory, not filter**: `configure_logging()` installs a log-record factory (not a root-logger filter) so child loggers that propagate upward are also covered.
+- **Dual log delivery**: `configure_logging(otlp=False)` (default) writes JSON to stdout for sidecar collection. `configure_logging(otlp=True)` ships logs via `OTLPLogExporter` + `BatchLogRecordProcessor` directly to the OTel Collector over gRPC — same port as traces (`OTEL_EXPORTER_OTLP_ENDPOINT`). No sidecar required in OTLP mode.
 - **No custom queue**: `BatchSpanProcessor` already handles async export with local buffering and retry.
 - **Loki cardinality**: `helix_entity_id` is NOT a Loki stream label — it would create one stream per entity and exhaust Loki's stream limit. It is embedded in JSON and filtered at query time via `| json | helix_entity_id = "..."`.
 
