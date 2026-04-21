@@ -3,18 +3,22 @@ helixobs.logging
 ────────────────
 Structured log context injection for HelixObs instrument pipelines.
 
-``configure_logging()`` does two things:
+``configure_logging()`` supports two shipping modes:
 
-1. Installs a log-record factory that reads the active OTel span and
-   injects helix context fields into every record:
-     - helixEntityID, helixInstrumentID  (from span attributes)
-     - otelTraceID, otelSpanID
-     - helixSource  (repo-relative file:line, or GitHub permalink)
+**stdout mode** (default, ``otlp=False``):
+  Installs a JSON formatter so every log line is a single-line JSON object.
+  Grafana Alloy (or any log collector on the host) tails stdout and pushes
+  to Loki.  No extra dependencies required.
 
-2. Attaches a JSON formatter to the root handler so every log line is a
-   single-line JSON object.  Grafana Alloy (or any log collector) can
-   then parse the JSON and promote ``helix_entity_id`` / ``helix_instrument_id``
-   as Loki stream labels without the application making any HTTP calls.
+**OTLP mode** (``otlp=True``):
+  Ships logs directly to the OTel Collector over gRPC, exactly like traces.
+  Requires ``opentelemetry-exporter-otlp-proto-grpc``.  Use this for
+  greenfield services that have no sidecar.
+
+In both modes the log-record factory injects OTel span context fields:
+  - helixEntityID, helixInstrumentID  (from active span attributes)
+  - otelTraceID, otelSpanID
+  - helixSource  (repo-relative file:line, or GitHub permalink)
 
 When the environment variables ``GITHUB_REPO`` and ``GIT_COMMIT_SHA`` are
 set the ``helixSource`` field becomes a full GitHub permalink.
@@ -23,7 +27,14 @@ Usage (once at application startup):
 
     from helixobs.logging import configure_logging
 
+    # Greenfield service — send logs via OTLP to the collector
+    configure_logging(otlp=True)
+
+    # Legacy / sidecar service — write JSON to stdout as before
     configure_logging()
+
+The OTLP endpoint is read from ``OTEL_EXPORTER_OTLP_ENDPOINT`` (default
+``http://localhost:4317``).
 """
 
 from __future__ import annotations
@@ -36,13 +47,20 @@ import re
 from opentelemetry import trace
 
 
-def configure_logging() -> None:
-    """Install the helix factory and JSON formatter on the root logger.
+def configure_logging(*, otlp: bool = False) -> None:
+    """Install the helix factory and attach log handlers on the root logger.
+
+    Args:
+        otlp: When True, ship logs via OTLP gRPC instead of stdout JSON.
+              Requires ``opentelemetry-exporter-otlp-proto-grpc``.
 
     Safe to call multiple times — subsequent calls are no-ops.
     """
     _install_factory()
-    _install_json_handler()
+    if otlp:
+        _install_otlp_handler()
+    else:
+        _install_json_handler()
 
 
 # ── JSON formatter ────────────────────────────────────────────────────────────
@@ -88,6 +106,40 @@ def _install_json_handler() -> None:
         h = logging.StreamHandler()
         h.setFormatter(_HelixJsonFormatter())
         root.addHandler(h)
+
+
+_otlp_handler_installed = False
+
+
+def _install_otlp_handler() -> None:
+    global _otlp_handler_installed
+    if _otlp_handler_installed:
+        return
+    _otlp_handler_installed = True
+
+    try:
+        from opentelemetry._logs import set_logger_provider
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+        from opentelemetry.sdk.resources import Resource
+    except ImportError as exc:
+        raise ImportError(
+            "OTLP log shipping requires 'opentelemetry-exporter-otlp-proto-grpc'. "
+            "Install it with: pip install opentelemetry-exporter-otlp-proto-grpc"
+        ) from exc
+
+    endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+    resource = Resource.create()
+
+    provider = LoggerProvider(resource=resource)
+    provider.add_log_record_processor(
+        BatchLogRecordProcessor(OTLPLogExporter(endpoint=endpoint, insecure=True))
+    )
+    set_logger_provider(provider)
+
+    handler = LoggingHandler(logger_provider=provider)
+    logging.getLogger().addHandler(handler)
 
 
 # ── Source-location helpers ───────────────────────────────────────────────────
