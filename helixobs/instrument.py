@@ -65,6 +65,11 @@ _ATTR_INSTRUMENT_ID = "helix.instrument.id"
 _ATTR_PARENT_IDS    = "helix.parent.ids"    # comma-separated; cross-process fallback
 _ATTR_IS_OPERATION  = "helix.entity.is_operation"
 
+# Logging-only context attribute set on child spans so the log factory can
+# inject helix_entity_id without triggering gateway entity processing.
+# The gateway only acts on helix.entity.id — this attribute is ignored by it.
+_ATTR_LOG_ENTITY_ID = "helix.log.entity_id"
+
 
 # ── Token ─────────────────────────────────────────────────────────────────────
 
@@ -321,7 +326,17 @@ class Instrument:
             )
         else:
             ctx = context_api.get_current()
+        # Inherit entity ID from the current active span before we replace it.
+        # Use _ATTR_LOG_ENTITY_ID (not _ATTR_ENTITY_ID) so the gateway does not
+        # treat child spans as entity creation spans and write duplicate DB rows.
+        active_attrs = getattr(trace.get_current_span(), "attributes", {}) or {}
+        inherited_entity_id = parent_id or (
+            active_attrs.get(_ATTR_ENTITY_ID) or active_attrs.get(_ATTR_LOG_ENTITY_ID, "")
+        )
         with self._tracer.start_as_current_span(name, context=ctx) as span:
+            span.set_attribute(_ATTR_INSTRUMENT_ID, self.instrument_id)
+            if inherited_entity_id:
+                span.set_attribute(_ATTR_LOG_ENTITY_ID, inherited_entity_id)
             if attributes:
                 for k, v in attributes.items():
                     span.set_attribute(k, v)

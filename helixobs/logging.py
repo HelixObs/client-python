@@ -183,7 +183,8 @@ def _install_factory() -> None:
             record.otelTraceID       = format(sc.trace_id, "032x")
             record.otelSpanID        = format(sc.span_id,  "016x")
             attrs                    = getattr(span, "attributes", {}) or {}
-            record.helixEntityID     = attrs.get("helix.entity.id", "")
+            record.helixEntityID     = (attrs.get("helix.entity.id")
+                                        or attrs.get("helix.log.entity_id", ""))
             record.helixInstrumentID = attrs.get("helix.instrument.id", "")
         else:
             record.otelTraceID       = ""
