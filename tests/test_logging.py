@@ -43,14 +43,14 @@ class TestFactoryOutsideSpan:
     def test_trace_id_empty_outside_span(self):
         helix_logging.configure_logging()
         record = _make_record()
-        assert record.otelTraceID == ""
-        assert record.otelSpanID == ""
+        assert record.otel_trace_id == ""
+        assert record.otel_span_id == ""
 
     def test_entity_id_empty_outside_span(self):
         helix_logging.configure_logging()
         record = _make_record()
-        assert record.helixEntityID == ""
-        assert record.helixInstrumentID == ""
+        assert record.helix_entity_id == ""
+        assert record.helix_instrument_id == ""
 
 
 class TestFactoryInsideSpan:
@@ -59,30 +59,30 @@ class TestFactoryInsideSpan:
         token = instrument.track("stage", id="entity-1")
         record = _make_record()
         instrument.complete(token)
-        assert record.otelTraceID != ""
-        assert len(record.otelTraceID) == 32  # 128-bit trace ID as hex
+        assert record.otel_trace_id != ""
+        assert len(record.otel_trace_id) == 32  # 128-bit trace ID as hex
 
     def test_span_id_injected_inside_span(self, instrument):
         helix_logging.configure_logging()
         token = instrument.track("stage", id="entity-1")
         record = _make_record()
         instrument.complete(token)
-        assert record.otelSpanID != ""
-        assert len(record.otelSpanID) == 16  # 64-bit span ID as hex
+        assert record.otel_span_id != ""
+        assert len(record.otel_span_id) == 16  # 64-bit span ID as hex
 
     def test_entity_id_injected_inside_span(self, instrument):
         helix_logging.configure_logging()
         token = instrument.track("stage", id="my-entity")
         record = _make_record()
         instrument.complete(token)
-        assert record.helixEntityID == "my-entity"
+        assert record.helix_entity_id == "my-entity"
 
     def test_ids_empty_after_span_ends(self, instrument):
         helix_logging.configure_logging()
         token = instrument.track("stage", id="entity-1")
         instrument.complete(token)
         record = _make_record()
-        assert record.otelTraceID == ""
+        assert record.otel_trace_id == ""
 
     def test_context_manager_injects_during_block(self, instrument):
         helix_logging.configure_logging()
@@ -90,8 +90,8 @@ class TestFactoryInsideSpan:
         with instrument.stage("stage", id="block-1"):
             records.append(_make_record("inside"))
         records.append(_make_record("outside"))
-        assert records[0].otelTraceID != ""
-        assert records[1].otelTraceID == ""
+        assert records[0].otel_trace_id != ""
+        assert records[1].otel_trace_id == ""
 
 
 class TestSourceLocation:
@@ -103,37 +103,37 @@ class TestSourceLocation:
     def test_helix_source_attribute_set(self):
         helix_logging.configure_logging()
         record = _make_record("hello")
-        assert hasattr(record, "helixSource")
-        assert record.helixSource != ""
+        assert hasattr(record, "helix_source")
+        assert record.helix_source != ""
 
     def test_src_contains_lineno(self):
         helix_logging.configure_logging()
         record = _make_record()
         # record.lineno is 1 as set by _make_record
-        assert "#L1" in record.helixSource
+        assert "#L1" in record.helix_source
 
     def test_src_fallback_no_env_vars(self):
         helix_logging.configure_logging()
         record = _make_record()
         # Without env vars, should be a plain path, not a URL
-        assert "github.com" not in record.helixSource
+        assert "github.com" not in record.helix_source
 
     def test_src_github_permalink_when_env_vars_set(self, monkeypatch):
         monkeypatch.setenv("GITHUB_REPO",    "https://github.com/HelixObs/client-python")
         monkeypatch.setenv("GIT_COMMIT_SHA", "abc123def456")
         helix_logging.configure_logging()
         record = _make_record()
-        assert record.helixSource.startswith(
+        assert record.helix_source.startswith(
             "https://github.com/HelixObs/client-python/blob/abc123def456/"
         )
-        assert "#L" in record.helixSource
+        assert "#L" in record.helix_source
 
     def test_src_trailing_slash_stripped_from_repo_url(self, monkeypatch):
         monkeypatch.setenv("GITHUB_REPO",    "https://github.com/HelixObs/client-python/")
         monkeypatch.setenv("GIT_COMMIT_SHA", "sha1")
         helix_logging.configure_logging()
         record = _make_record()
-        assert "//blob" not in record.helixSource
+        assert "//blob" not in record.helix_source
 
     def test_record_args_cleared(self):
         helix_logging.configure_logging()

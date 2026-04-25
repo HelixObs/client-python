@@ -75,11 +75,11 @@ class _HelixJsonFormatter(logging.Formatter):
             "level":                 record.levelname.lower(),
             "logger":                record.name,
             "msg":                   record.message,
-            "src":                   getattr(record, "helixSource", ""),
-            "helix_entity_id":       getattr(record, "helixEntityID", ""),
-            "helix_instrument_id":   getattr(record, "helixInstrumentID", ""),
-            "otel_trace_id":         getattr(record, "otelTraceID", ""),
-            "otel_span_id":          getattr(record, "otelSpanID", ""),
+            "src":                   getattr(record, "helix_source", ""),
+            "helix_entity_id":       getattr(record, "helix_entity_id", ""),
+            "helix_instrument_id":   getattr(record, "helix_instrument_id", ""),
+            "otel_trace_id":         getattr(record, "otel_trace_id", ""),
+            "otel_span_id":          getattr(record, "otel_span_id", ""),
         }
         if record.exc_info:
             obj["exc"] = self.formatException(record.exc_info)
@@ -180,25 +180,25 @@ def _install_factory() -> None:
         span = trace.get_current_span()
         sc   = span.get_span_context()
         if sc.is_valid:
-            record.otelTraceID       = format(sc.trace_id, "032x")
-            record.otelSpanID        = format(sc.span_id,  "016x")
-            attrs                    = getattr(span, "attributes", {}) or {}
-            record.helixEntityID     = (attrs.get("helix.entity.id")
-                                        or attrs.get("helix.log.entity_id", ""))
-            record.helixInstrumentID = attrs.get("helix.instrument.id", "")
+            record.otel_trace_id       = format(sc.trace_id, "032x")
+            record.otel_span_id        = format(sc.span_id,  "016x")
+            attrs                      = getattr(span, "attributes", {}) or {}
+            record.helix_entity_id     = (attrs.get("helix.entity.id")
+                                          or attrs.get("helix.log.entity_id", ""))
+            record.helix_instrument_id = attrs.get("helix.instrument.id", "")
         else:
-            record.otelTraceID       = ""
-            record.otelSpanID        = ""
-            record.helixEntityID     = ""
-            record.helixInstrumentID = ""
+            record.otel_trace_id       = ""
+            record.otel_span_id        = ""
+            record.helix_entity_id     = ""
+            record.helix_instrument_id = ""
 
         rel = _normalize_path(record.pathname, record.filename)
         if github_repo:
-            record.helixSource = f"{github_repo}/blob/{git_ref}/{rel}#L{record.lineno}"
+            record.helix_source = f"{github_repo}/blob/{git_ref}/{rel}#L{record.lineno}"
         else:
-            record.helixSource = f"{rel}#L{record.lineno}"
+            record.helix_source = f"{rel}#L{record.lineno}"
 
-        record.msg = f"{record.msg}  src={record.helixSource}"
+        record.msg = f"{record.msg}  src={record.helix_source}"
         record.args = None
 
         return record
