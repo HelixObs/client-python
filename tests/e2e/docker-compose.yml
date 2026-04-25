@@ -25,6 +25,7 @@ services:
       # Migration SQL path is relative to the repo root, set via GATEWAY_REPO env var
       # in CI; locally, set GATEWAY_MIGRATIONS_DIR to point at your gateway checkout.
       - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/003_trace_dedup.sql:/docker-entrypoint-initdb.d/003_trace_dedup.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
