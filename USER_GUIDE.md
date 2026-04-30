@@ -26,7 +26,7 @@ Your pipeline process connects to a single endpoint. The full HelixObs stack run
 
 | Requirement | Details |
 |---|---|
-| **HelixObs Gateway** | gRPC endpoint (default `localhost:4317`). Every `track()`/`complete()`/`error()` call sends an OTLP span here. |
+| **HelixObs Gateway** | gRPC endpoint (default `localhost:4317`). Every `create()`/`operate()` call sends an OTLP span here. |
 | **Log delivery** | Choose one of two modes — see below. |
 
 **Sidecar mode (default):** Write JSON to stdout; Grafana Alloy (or any log collector) tails the container and ships to Loki. Zero extra dependencies.
@@ -130,12 +130,12 @@ tel = Instrument(
 )
 
 # 3. Track a pipeline entity (context manager — recommended)
-with tel.stage("frb-classifier", id=cand_id, parents=[block_id]) as span:
+with tel.create("frb-classifier", id=cand_id, parents=[block_id]) as token:
     result = classify(candidate)
     log.info("candidate classified")          # helix_entity_id auto-injected
     if result.snr > 50:
-        span.add_event("helix.event.candidate_promoted", {"snr": result.snr})
-# span ends here — complete() called automatically; error() on exception
+        token.add_event("helix.event.candidate_promoted", {"snr": result.snr})
+# token ends here — complete() called automatically; error() on exception
 ```
 
 ---
@@ -150,7 +150,7 @@ An entity is any discrete data product your pipeline produces or consumes: a dat
 - An **instrument ID** stamped by the client library
 - A **provenance DAG** — the IDs of entities this one was derived from
 - **Metadata** — arbitrary key/value attributes attached at any point
-- A **creation trace** — the OTel span tree from when the entity was first tracked
+- A **creation trace** — the OTel span tree from when the entity was first created
 - **Operation traces** — independent traces for each post-creation operation (see below)
 - **Events** — `helix.*` span events attached across any trace
 - **Logs** — all log lines emitted while any of the entity's spans are active
@@ -161,7 +161,7 @@ Some work happens on an entity *after* its creation trace has ended — often as
 
 These are not new entities. They are **operations on an existing entity**, each running in their own independent OTel trace. The Entity Inspector shows all traces associated with an entity — the creation trace plus every operation trace — so you can drill into each one separately.
 
-Use `tel.operate()` for these cases (see API Reference). If the entity does not yet exist when an operation arrives at the gateway, a placeholder entity is created automatically with default values.
+Use `tel.operate()` for these cases (see API Reference). If the entity does not yet exist when an operation arrives at the gateway, a placeholder entity is created automatically.
 
 ### Instrument
 
@@ -169,11 +169,15 @@ Use `tel.operate()` for these cases (see API Reference). If the entity does not 
 
 ### Token
 
-`track()` returns a `Token`. Pass it to `complete()` or `error()` when processing is done. When using the context manager (`stage()`), the token is the `as` variable and lifecycle is automatic.
+Both `tel.create()` and `tel.operate()` return a `Token`. It is usable three ways:
+
+- **Primitive (Layer 0):** call `.start()`, then `.complete()` or `.error()` explicitly.
+- **Context manager (Layer 1):** use `with tel.create(...) as token:` — lifecycle is automatic.
+- **Decorator (Layer 2):** use `@tel.create(...)` above a function — wraps the call automatically.
 
 ### Parent resolution
 
-When you pass `parents=["block-abc123"]`, the library checks its in-process store first. If the parent was tracked in the same process, it becomes an OTel span link. If the parent was created in a different process, its ID is set as the `helix.parent.ids` span attribute and the gateway resolves the DAG edge server-side.
+When you pass `parents=["block-abc123"]`, the library checks its in-process store first. If the parent was created in the same process, it becomes an OTel span link. If the parent was created in a different process, its ID is set as the `helix.parent.ids` span attribute and the gateway resolves the DAG edge server-side.
 
 ---
 
@@ -190,60 +194,36 @@ When you pass `parents=["block-abc123"]`, the library checks its in-process stor
 
 ---
 
-### `tel.track(stage_name, *, id, parents) → Token`
+### `tel.create(stage_name, *, id, parents) → Token`
 
-Start tracking an entity. Opens an OTel span and sets it as the active context on the calling thread.
+Return a `Token` for a new entity entering the pipeline. The token is **not yet started** — call `.start()`, use as a context manager, or use as a decorator.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `stage_name` | `str` | Pipeline stage name. e.g. `"frb-classifier"`. Shown as the span name in Tempo. |
-| `id` | `str` | Unique entity ID. You own this — any string that uniquely identifies the data product. |
-| `parents` | `list[str]` | Optional list of parent entity IDs. Builds the provenance DAG. |
+| `stage_name` | `str` | Pipeline stage name. Shown as the span name in Tempo. e.g. `"frb-classifier"` |
+| `id` | `str \| Callable` | Unique entity ID, or a callable that receives the wrapped function's args and returns one. |
+| `parents` | `list[str] \| Callable \| None` | Parent entity IDs for the provenance DAG, or a callable. |
 
+**Layer 0 — Primitive:**
 ```python
-token = tel.track("frb-classifier", id=cand_id, parents=[block_id])
+token = tel.create("frb-classifier", id=cand_id, parents=[block_id]).start()
 result = classify(candidate)
-tel.complete(token)
+token.complete()
+
+# On failure:
+token.error(metadata={"message": "SNR below threshold", "snr": result.snr})
 ```
 
----
-
-### `tel.complete(token, metadata=None)`
-
-Mark the entity as successfully processed. Ends the span. Safe to call multiple times (no-op after first call).
-
+**Layer 1 — Context manager:**
 ```python
-tel.complete(token, metadata={"output_file": "/data/frb-001.hdf5"})
-```
-
----
-
-### `tel.error(token, metadata=None)`
-
-Record a `helix.error` span event and mark the entity as failed. Sets OTel span status to `ERROR`. Safe to call multiple times.
-
-```python
-tel.error(token, metadata={"message": "SNR threshold not met", "snr": 7.2})
-```
-
----
-
-### `tel.stage(stage_name, *, id, parents) → _StageHelper`
-
-Returns a helper usable as a **context manager** or **decorator**. On exception, calls `error()` automatically. On normal exit, calls `complete()`.
-
-**Context manager:**
-
-```python
-with tel.stage("frb-classifier", id=cand_id, parents=[block_id]) as span:
+with tel.create("frb-classifier", id=cand_id, parents=[block_id]) as token:
     result = classify(candidate)
-    span.add_event("helix.event.candidate_promoted", {"snr": result.snr})
+    token.add_event("helix.event.candidate_promoted", {"snr": result.snr})
 ```
 
-**Decorator** (when `id` and `parents` can be derived from function arguments):
-
+**Layer 2 — Decorator:**
 ```python
-@tel.stage(
+@tel.create(
     "frb-classifier",
     id=lambda cand: cand.id,
     parents=lambda cand: [cand.block_id],
@@ -254,20 +234,41 @@ def classify_candidate(cand):
 
 ---
 
-### `token.add_event(name, attributes=None)`
+### `tel.operate(operation, *, entity_id) → Token`
 
-Attach a timestamped event to the entity's span. Use:
+Return a `Token` for an operation on an existing entity. Always starts a new root OTel trace — independent of the entity's creation trace. The gateway writes an `entity_operations` row so the Entity Inspector shows all traces for that entity across its lifetime.
 
-- `"helix.error"` — for errors (prefer `tel.error()` instead)
-- `"helix.event.<name>"` — for scientifically notable signals
+| Parameter | Type | Description |
+|---|---|---|
+| `operation` | `str` | Operation name shown in Tempo and the Trace panel |
+| `entity_id` | `str` | ID of the existing entity being operated on |
 
 ```python
-span.add_event("helix.event.voevent_issued", {
-    "ra":  result.ra,
-    "dec": result.dec,
-    "dm":  result.dm,
-})
+with tel.operate("hdf5-conversion", entity_id=event_id) as op:
+    size_mb = write_hdf5(event_id)
+    op.set_attribute("helix.chime.hdf5_size_mb", size_mb)
+    if write_failed:
+        log.error("HDF5 write failed: disk full")
+        op.error({"message": "hdf5_write_error"})
+        return None
+    log.info(f"HDF5 written: {size_mb:.1f} MB")
 ```
+
+Unhandled exceptions inside the `with` block automatically mark the operation as failed.
+
+If the entity does not exist yet (race condition or late arrival), the gateway creates a minimal placeholder entity so the operation is never orphaned.
+
+---
+
+### `Token` methods
+
+| Method | Description |
+|---|---|
+| `token.start() → Token` | Start the underlying span. Returns `self` for chaining. Called implicitly by the context manager and decorator. |
+| `token.complete(metadata=None)` | End the span successfully. Optional `metadata` dict is set as span attributes. No-op if already done. |
+| `token.error(metadata=None)` | Record a `helix.error` span event, set span status to ERROR, and end the span. No-op if already done. |
+| `token.add_event(name, attributes=None)` | Attach a timestamped `helix.*` event to the span. Written to `entity_events` by the gateway. |
+| `token.set_attribute(key, value)` | Set a span attribute directly. |
 
 ---
 
@@ -292,43 +293,6 @@ with tel.child_span("ring-buffer-rpc", parent_id=event_id) as span:
     data = fetch_ring_buffer()
     span.set_attribute("helix.chime.buffer_size_mb", len(data) / 1e6)
 ```
-
----
-
-### `tel.operate(operation, *, entity_id) → context manager`
-
-Start an **independent trace** for an operation performed on an existing entity. Unlike `child_span()`, this opens a new root trace — the operation is not a child of the entity's creation trace. The gateway writes an `entity_operations` row so the Entity Inspector shows all traces for that entity across its lifetime.
-
-Yields an `_OperationHandle` with `set_attribute()`, `add_event()`, and `fail()`.
-
-| Parameter | Type | Description |
-|---|---|---|
-| `operation` | `str` | Operation name shown in Tempo and the Trace panel |
-| `entity_id` | `str` | ID of the existing entity being operated on |
-
-```python
-with tel.operate("hdf5-conversion", entity_id=event_id) as op:
-    op.set_attribute("helix.chime.hdf5_size_mb", size_mb)
-    if write_failed:
-        log.error("HDF5 write failed: disk full")
-        op.fail("hdf5_write_error")     # records helix.error event + sets span ERROR
-        return None
-    log.info(f"HDF5 written: {size_mb:.1f} MB")
-```
-
-Unhandled exceptions inside the `with` block automatically mark the operation as failed.
-
-If the entity does not exist yet (race condition or late arrival), the gateway creates a minimal placeholder entity so the operation is never orphaned.
-
----
-
-### `_OperationHandle` (yielded by `operate()`)
-
-| Method | Description |
-|---|---|
-| `set_attribute(key, value)` | Set a span attribute on the operation span |
-| `add_event(name, attributes=None)` | Attach a `helix.*` span event (written to `entity_events`) |
-| `fail(message)` | Record `helix.error` event and mark span as ERROR |
 
 ---
 
@@ -370,7 +334,7 @@ In both modes every log line carries the same helix context fields (populated fr
 {"ts": "2026-04-18T12:00:01", "level": "info", "logger": "chime.simulator", "msg": "candidate classified", "helix_entity_id": "cand-abc123", "helix_instrument_id": "CHIME", "otel_trace_id": "abc...", "otel_span_id": "def..."}
 ```
 
-**Log while the span is active** (before `complete()`/`error()`) to capture entity context.
+**Log while the span is active** (before `token.complete()`/`token.error()`) to capture entity context.
 
 Optional environment variables for GitHub source links:
 
@@ -391,15 +355,15 @@ Best for long-running loops, async code, or anywhere a context manager is awkwar
 
 ```python
 block_id = f"block-{uuid.uuid4().hex[:12]}"
-token = tel.track("x-engine", id=block_id)
+token = tel.create("x-engine", id=block_id).start()
 
 try:
     data = ingest_fpga_block()
     log.info("block ingested")
-    tel.complete(token)
+    token.complete()
 except Exception as exc:
     log.exception("ingestion failed")
-    tel.error(token, metadata={"message": str(exc)})
+    token.error(metadata={"message": str(exc)})
 ```
 
 ### Pattern 2 — Context manager (Layer 1)
@@ -407,11 +371,11 @@ except Exception as exc:
 Best for structured Python code where one `with` block maps to one pipeline stage.
 
 ```python
-with tel.stage("frb-classifier", id=cand_id, parents=[block_id]) as span:
+with tel.create("frb-classifier", id=cand_id, parents=[block_id]) as token:
     result = classifier.run(candidate)
     log.info("candidate classified")
     if result.snr > 50:
-        span.add_event("helix.event.candidate_promoted", {"snr": result.snr})
+        token.add_event("helix.event.candidate_promoted", {"snr": result.snr})
 # complete() on clean exit; error() on unhandled exception
 ```
 
@@ -420,7 +384,7 @@ with tel.stage("frb-classifier", id=cand_id, parents=[block_id]) as span:
 Best when one function maps cleanly to one pipeline stage and its arguments carry the entity ID.
 
 ```python
-@tel.stage(
+@tel.create(
     "clustering",
     id=lambda cands: f"event-{uuid.uuid4().hex[:12]}",
     parents=lambda cands: [c.id for c in cands],
@@ -434,7 +398,7 @@ def cluster_event(cands: list[Candidate]) -> FRBEvent:
 Use `child_span()` for work that belongs inside one entity's trace — it appears in Tempo as a nested span but creates no DB entity row.
 
 ```python
-token = tel.track("l1-search", id=beam_id, parents=[block_id])
+token = tel.create("l1-search", id=beam_id, parents=[block_id]).start()
 
 with tel.child_span("rfi-mitigation") as span:
     n = excise_rfi(data)
@@ -444,7 +408,7 @@ with tel.child_span("dedispersion") as span:
     trials = run_dedispersion(data)
     span.set_attribute("helix.chime.dm_trials", trials)
 
-tel.complete(token)
+token.complete()
 ```
 
 ### Post-creation operations with `operate()`
@@ -470,7 +434,7 @@ for dest in ["cedar", "niagara"]:
         op.set_attribute("helix.chime.replication_dest", dest)
         if not replicate_to(dest):
             log.error(f"replication to {dest} failed")
-            op.fail("replication_timeout")
+            op.error({"message": "replication_timeout"})
 ```
 
 ### Multi-stage pipeline
@@ -479,22 +443,19 @@ Each stage creates its own entity. Parent IDs wire the provenance DAG.
 
 ```python
 # Stage 1: ingest
-block_token = tel.track("x-engine", id=block_id)
-ingest()
-log.info("block ingested")
-tel.complete(block_token)
+with tel.create("x-engine", id=block_id) as token:
+    ingest()
+    log.info("block ingested")
 
 # Stage 2: classify (derived from the block)
-cand_token = tel.track("frb-classifier", id=cand_id, parents=[block_id])
-result = classify()
-log.info("candidate classified")
-tel.complete(cand_token)
+with tel.create("frb-classifier", id=cand_id, parents=[block_id]) as token:
+    result = classify()
+    log.info("candidate classified")
 
 # Stage 3: cluster (derived from multiple candidates)
-event_token = tel.track("clustering", id=event_id, parents=cand_ids)
-event = cluster()
-log.info("event clustered")
-tel.complete(event_token)
+with tel.create("clustering", id=event_id, parents=cand_ids) as token:
+    event = cluster()
+    log.info("event clustered")
 ```
 
 The gateway stores `parent_ids` for each entity, enabling the recursive provenance DAG query in Grafana.
@@ -509,15 +470,15 @@ The gateway stores `parent_ids` for each entity, enabling the recursive provenan
 
 ```python
 # CORRECT — log before complete(); factory reads entity ID from active span
-token = tel.track("frb-classifier", id=cand_id, parents=[block_id])
+token = tel.create("frb-classifier", id=cand_id, parents=[block_id]).start()
 result = classify()
 log.info("candidate classified")     # helix_entity_id present in output
-tel.complete(token)
+token.complete()
 
 # WRONG — span is already ended; factory finds no active span
-token = tel.track("frb-classifier", id=cand_id, parents=[block_id])
+token = tel.create("frb-classifier", id=cand_id, parents=[block_id]).start()
 result = classify()
-tel.complete(token)
+token.complete()
 log.info("candidate classified")     # helix_entity_id missing
 ```
 
@@ -566,7 +527,8 @@ One row per `helix.*` span event, from any trace associated with the entity (cre
 | `instrument_id` | TEXT | Instrument identifier |
 | `event_name` | TEXT | e.g. `helix.error`, `helix.event.candidate_promoted` |
 | `timestamp_ns` | BIGINT | When the event occurred (from OTel span event) |
-| `metadata` | JSONB | Event attributes from `span.add_event(name, attributes)` |
+| `trace_id` | TEXT | OTel trace ID — links event to the span that emitted it |
+| `metadata` | JSONB | Event attributes from `token.add_event(name, attributes)` |
 | `created_at` | TIMESTAMPTZ | Wall-clock insert time |
 
 ### entity_operations table
@@ -625,48 +587,68 @@ tel = Instrument(
 def ingest_block() -> str:
     block_id = f"block-{uuid.uuid4().hex[:12]}"
 
-    with tel.stage("x-engine", id=block_id) as span:
+    with tel.create("x-engine", id=block_id) as token:
         data = read_fpga_buffer()
         log.info("block ingested")
-        span.add_event("helix.event.block_received", {"n_samples": len(data)})
+        token.add_event("helix.event.block_received", {"n_samples": len(data)})
 
     return block_id
 
 
 def classify_candidate(block_id: str, beam: int) -> str | None:
     cand_id = f"cand-{uuid.uuid4().hex[:12]}"
-    token = tel.track("frb-classifier", id=cand_id, parents=[block_id])
+    token = tel.create("frb-classifier", id=cand_id, parents=[block_id]).start()
 
     try:
         result = run_classifier(beam)
         if result.snr < 8.0:
             log.warning("candidate rejected: low SNR")
-            tel.error(token, metadata={"message": "SNR below threshold", "snr": result.snr})
+            token.error(metadata={"message": "SNR below threshold", "snr": result.snr})
             return None
 
         log.info("candidate classified")
-        tel.complete(token)
+        token.complete()
         return cand_id
 
     except Exception as exc:
         log.exception("classifier failed")
-        tel.error(token, metadata={"message": str(exc)})
+        token.error(metadata={"message": str(exc)})
         return None
 
 
-def cluster_event(cand_ids: list[str]) -> None:
+def cluster_event(cand_ids: list[str]) -> str | None:
     if len(cand_ids) < 2:
-        return
+        return None
 
     event_id = f"frb-{uuid.uuid4().hex[:12]}"
-    with tel.stage("clustering", id=event_id, parents=cand_ids) as span:
+    with tel.create("clustering", id=event_id, parents=cand_ids) as token:
         event = run_clustering(cand_ids)
         log.info("event clustered")
-        span.add_event("helix.event.frb_candidate", {
+        token.add_event("helix.event.frb_candidate", {
             "ra":             event.ra,
             "dec":            event.dec,
             "classification": event.classification,
         })
+
+    return event_id
+
+
+def post_detection(event_id: str) -> None:
+    with tel.operate("hdf5-conversion", entity_id=event_id) as op:
+        size_mb = write_hdf5(event_id)
+        op.set_attribute("helix.chime.hdf5_size_mb", size_mb)
+        log.info(f"HDF5 written: {size_mb:.1f} MB")
+
+    with tel.operate("registration", entity_id=event_id) as op:
+        register_in_catalog(event_id)
+        log.info("event registered")
+
+    for dest in ["cedar", "niagara"]:
+        with tel.operate("replication", entity_id=event_id) as op:
+            op.set_attribute("helix.chime.replication_dest", dest)
+            if not replicate_to(dest):
+                log.error(f"replication to {dest} timed out")
+                op.error({"message": "replication_timeout", "dest": dest})
 ```
 
 ---
