@@ -26,6 +26,7 @@ services:
       # in CI; locally, set GATEWAY_MIGRATIONS_DIR to point at your gateway checkout.
       - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
       - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/003_trace_dedup.sql:/docker-entrypoint-initdb.d/003_trace_dedup.sql:ro
+      - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/005_entity_events_trace_id.sql:/docker-entrypoint-initdb.d/005_entity_events_trace_id.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
