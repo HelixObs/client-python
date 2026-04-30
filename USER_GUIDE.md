@@ -1,6 +1,6 @@
 # HelixObs Python Client — User Guide
 
-HelixObs gives scientific instrument pipelines entity-centric observability: every data product (block, candidate, event) gets a persistent identity, a provenance graph, structured logs, and a distributed trace — all queryable from a single Grafana UI.
+HelixObs gives scientific instrument pipelines entity-centric observability: every data product gets a persistent identity, a provenance graph, structured logs, and a distributed trace — all queryable from a single Grafana UI.
 
 ---
 
@@ -8,13 +8,12 @@ HelixObs gives scientific instrument pipelines entity-centric observability: eve
 
 1. [Required Infrastructure](#1-required-infrastructure)
 2. [Installation](#2-installation)
-3. [Quickstart](#3-quickstart)
-4. [Core Concepts](#4-core-concepts)
-5. [API Reference](#5-api-reference)
-6. [Integration Patterns](#6-integration-patterns)
-7. [Structured Logging](#7-structured-logging)
-8. [Data Model](#8-data-model)
-9. [Complete Example](#9-complete-example)
+3. [Core Concepts](#3-core-concepts)
+4. [API Reference](#4-api-reference)
+5. [Integration Patterns](#5-integration-patterns)
+6. [Structured Logging](#6-structured-logging)
+7. [Data Model](#7-data-model)
+8. [Complete Example](#8-complete-example)
 
 ---
 
@@ -22,74 +21,26 @@ HelixObs gives scientific instrument pipelines entity-centric observability: eve
 
 Your pipeline process connects to a single endpoint. The full HelixObs stack runs everything else.
 
-### What your process needs
-
 | Requirement | Details |
 |---|---|
 | **HelixObs Gateway** | gRPC endpoint (default `localhost:4317`). Every `create()`/`operate()` call sends an OTLP span here. |
-| **Log delivery** | Choose one of two modes — see below. |
+| **Log delivery** | Sidecar mode (default) or OTLP mode — see [Structured Logging](#6-structured-logging). |
 
-**Sidecar mode (default):** Write JSON to stdout; Grafana Alloy (or any log collector) tails the container and ships to Loki. Zero extra dependencies.
+> In both modes your pipeline makes no HTTP calls and no direct database calls. All telemetry flows through gRPC.
 
-**OTLP mode (greenfield services):** Call `configure_logging(otlp=True)`. Logs are shipped directly to the OTel Collector over the same gRPC connection used for traces — no sidecar required. The collector's `logs` pipeline forwards them to Loki.
+### Stack components
 
-> **In both modes** your pipeline process makes no HTTP calls and no direct Loki calls. All telemetry flows through gRPC.
-
-### HelixObs stack components
-
-The following services must be running for the full UI to work. All are included in the reference `docker-compose.yml`:
-
-| Service | Role | Default port (host) |
+| Service | Role | Default port |
 |---|---|---|
-| **HelixObs Gateway** | Receives OTLP spans, writes entities + events to TimescaleDB, forwards traces to OTel Collector | `4317` (gRPC) |
-| **TimescaleDB** | Stores entities, parent DAG, and entity events. Source for Grafana PostgreSQL panels. | `5432` |
-| **OTel Collector** | Receives forwarded traces (and optionally logs) from gateway, exports to Tempo / Loki | internal |
-| **Tempo** | Distributed trace storage. Source for Grafana span tree panels. | `3201` |
-| **Loki** | Log aggregation. Receives logs from the sidecar collector **or** the OTel Collector logs pipeline. | `3101` |
-| **Prometheus** | Scrapes `helix_events_total` and other metrics from the gateway. | `9091` |
-| **Grafana** | Dashboard UI — Entity Inspector, Error Entities, custom dashboards. | `3001` |
-| **Log collector sidecar** | _(sidecar mode only)_ Reads container stdout, extracts JSON fields, ships to Loki as stream labels. Reference: Grafana Alloy. | internal |
+| **Gateway** | Receives OTLP spans, writes entities + events to TimescaleDB, forwards to OTel Collector | `4317` gRPC, `8080` HTTP |
+| **TimescaleDB** | Stores entities, provenance DAG, events, and operation records | `5432` |
+| **OTel Collector** | Receives forwarded traces and logs, exports to Tempo and Loki | internal |
+| **Tempo** | Distributed trace storage | `3201` |
+| **Loki** | Log aggregation | `3101` |
+| **Prometheus** | Metrics — gateway throughput, error rates, DB latency | `9091` |
+| **Grafana** | Dashboard UI — Entity Inspector, Error Entities, Platform Health | `3001` |
 
-### Log collector sidecar (Grafana Alloy reference config)
-
-Your process writes newline-delimited JSON to stdout. The sidecar reads it and promotes three fields as Loki stream labels:
-
-```alloy
-discovery.docker "containers" {
-  host = "unix:///var/run/docker.sock"
-}
-
-loki.source.docker "containers" {
-  host       = "unix:///var/run/docker.sock"
-  targets    = discovery.docker.containers.targets
-  forward_to = [loki.process.helix_json.receiver]
-  refresh_interval = "5s"
-}
-
-loki.process "helix_json" {
-  stage.json {
-    expressions = {
-      helix_instrument_id = "helix_instrument_id",
-      level               = "level",
-    }
-  }
-  stage.labels {
-    values = {
-      helix_instrument_id = "",
-      level               = "",
-    }
-  }
-  forward_to = [loki.write.default.receiver]
-}
-
-loki.write "default" {
-  endpoint { url = "http://loki:3100/loki/api/v1/push" }
-}
-```
-
-Any collector that reads container stdout and forwards to Loki works: Promtail, Fluent Bit, Vector, or the OTel Collector with a `filelog` receiver. The contract is newline-delimited JSON on stdout with `helix_instrument_id` and `level` as top-level string fields.
-
-> **Note:** `helix_entity_id` is intentionally **not** a Loki stream label. Because each entity has a unique ID, using it as a label creates one stream per entity and quickly exhausts Loki's stream limit. Entity-scoped log queries use `| json | helix_entity_id = "..."` at query time instead.
+All services are included in the reference `docker-compose.yml`.
 
 ---
 
@@ -99,7 +50,7 @@ Any collector that reads container stdout and forwards to Loki works: Promtail, 
 pip install helixobs
 ```
 
-Requires Python 3.11+. The only runtime dependencies are the OpenTelemetry SDK and its gRPC OTLP exporter — no HTTP clients, no Loki SDK, no database drivers.
+Requires Python 3.11+. Runtime dependencies: OpenTelemetry SDK and its gRPC OTLP exporter — no HTTP clients, no database drivers.
 
 **From source:**
 
@@ -111,152 +62,104 @@ pip install -e .
 
 ---
 
-## 3. Quickstart
-
-```python
-from helixobs import Instrument
-from helixobs.logging import configure_logging
-import logging
-
-# 1. Configure JSON logging (once at startup)
-configure_logging()
-log = logging.getLogger("my.pipeline")
-
-# 2. Create one Instrument per process
-tel = Instrument(
-    service_name="mytelescope.frb-classifier",
-    instrument_id="MYTELESCOPE",
-    endpoint="gateway:4317",
-)
-
-# 3. Track a pipeline entity (context manager — recommended)
-with tel.create("frb-classifier", id=cand_id, parents=[block_id]) as token:
-    result = classify(candidate)
-    log.info("candidate classified")          # helix_entity_id auto-injected
-    if result.snr > 50:
-        token.add_event("helix.event.candidate_promoted", {"snr": result.snr})
-# token ends here — complete() called automatically; error() on exception
-```
-
----
-
-## 4. Core Concepts
+## 3. Core Concepts
 
 ### Entity
 
-An entity is any discrete data product your pipeline produces or consumes: a data block, a beam candidate, an FRB event, a calibration solution. Each entity has:
+An entity is any discrete data product your pipeline produces or consumes: a raw observation, an intermediate product, a derived result, a calibration solution. Each entity has:
 
-- A **unique ID** you assign (e.g. `"block-abc123"`, `"cand-def456"`)
+- A **unique ID** you assign (any string that identifies the data product)
 - An **instrument ID** stamped by the client library
 - A **provenance DAG** — the IDs of entities this one was derived from
-- **Metadata** — arbitrary key/value attributes attached at any point
+- **Metadata** — key/value attributes attached at any point
 - A **creation trace** — the OTel span tree from when the entity was first created
-- **Operation traces** — independent traces for each post-creation operation (see below)
-- **Events** — `helix.*` span events attached across any trace
+- **Operation traces** — independent traces for each post-creation operation
+- **Events** — `helix.*` span events recorded across any trace
 - **Logs** — all log lines emitted while any of the entity's spans are active
 
 ### Entity Operations
 
-Some work happens on an entity *after* its creation trace has ended — often asynchronously and in separate processes. Examples: converting an FRB event to HDF5, registering it in a catalog, replicating it to offsite storage.
+Some work happens on an entity *after* its creation trace has ended — often asynchronously in a separate process. These are not new entities; they are **operations on an existing entity**, each with their own independent OTel trace. Use `tel.operate()` for these cases.
 
-These are not new entities. They are **operations on an existing entity**, each running in their own independent OTel trace. The Entity Inspector shows all traces associated with an entity — the creation trace plus every operation trace — so you can drill into each one separately.
-
-Use `tel.operate()` for these cases (see API Reference). If the entity does not yet exist when an operation arrives at the gateway, a placeholder entity is created automatically.
-
-### Instrument
-
-`Instrument` is the single entry point. Create one instance per process and share it. It configures the OTel `TracerProvider` and manages an in-process `TraceStore` for parent resolution.
+If the entity does not yet exist when an operation arrives (race condition or late arrival), the gateway creates a minimal placeholder automatically.
 
 ### Token
 
-Both `tel.create()` and `tel.operate()` return a `Token`. It is usable three ways:
+Both `tel.create()` and `tel.operate()` return a `Token`. It is usable three ways — all emit identical OTLP:
 
-- **Primitive (Layer 0):** call `.start()`, then `.complete()` or `.error()` explicitly.
-- **Context manager (Layer 1):** use `with tel.create(...) as token:` — lifecycle is automatic.
-- **Decorator (Layer 2):** use `@tel.create(...)` above a function — wraps the call automatically.
+| Layer | Style | Use when |
+|---|---|---|
+| 0 — Primitive | `.start()` / `.complete()` / `.error()` | Long-running loops, async code, awkward control flow |
+| 1 — Context manager | `with tel.create(...) as token:` | Structured code where one block = one stage |
+| 2 — Decorator | `@tel.create(...)` | Functions that map cleanly to one stage |
 
 ### Parent resolution
 
-When you pass `parents=["block-abc123"]`, the library checks its in-process store first. If the parent was created in the same process, it becomes an OTel span link. If the parent was created in a different process, its ID is set as the `helix.parent.ids` span attribute and the gateway resolves the DAG edge server-side.
+When you pass `parents=["input-abc"]`, the library checks its in-process store first. If the parent was created in the same process, it becomes an OTel span `Link`. If it was created in a different process, its ID is set as the `helix.parent.ids` attribute and the gateway resolves the edge server-side.
 
 ---
 
-## 5. API Reference
+## 4. API Reference
 
 ### `Instrument(service_name, instrument_id, endpoint, insecure)`
 
+Create one instance per process and share it across pipeline stages.
+
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `service_name` | `str` | — | OTel service name. Shown in Tempo span tree. e.g. `"chime.frb-classifier"` |
-| `instrument_id` | `str` | — | Instrument identifier stamped on every entity. e.g. `"CHIME"` |
-| `endpoint` | `str` | `"localhost:4317"` | OTLP gRPC endpoint of the HelixObs gateway |
-| `insecure` | `bool` | `True` | Plaintext gRPC. Set `False` if the gateway has TLS. |
+| `service_name` | `str` | — | OTel service name, shown in Tempo. e.g. `"my-instrument.pipeline"` |
+| `instrument_id` | `str` | — | Identifier stamped on every entity. e.g. `"MY_INSTRUMENT"` |
+| `endpoint` | `str` | `"localhost:4317"` | OTLP gRPC address of the HelixObs gateway |
+| `insecure` | `bool` | `True` | Plaintext gRPC. Set `False` if the gateway uses TLS. |
 
 ---
 
 ### `tel.create(stage_name, *, id, parents) → Token`
 
-Return a `Token` for a new entity entering the pipeline. The token is **not yet started** — call `.start()`, use as a context manager, or use as a decorator.
+Return a `Token` for a new entity entering the pipeline.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `stage_name` | `str` | Pipeline stage name. Shown as the span name in Tempo. e.g. `"frb-classifier"` |
-| `id` | `str \| Callable` | Unique entity ID, or a callable that receives the wrapped function's args and returns one. |
-| `parents` | `list[str] \| Callable \| None` | Parent entity IDs for the provenance DAG, or a callable. |
+| `stage_name` | `str` | Pipeline stage name, shown as the span name in Tempo |
+| `id` | `str \| Callable` | Unique entity ID, or a callable receiving the wrapped function's args |
+| `parents` | `list[str] \| Callable \| None` | Parent entity IDs for the provenance DAG, or a callable |
 
-**Layer 0 — Primitive:**
 ```python
-token = tel.create("frb-classifier", id=cand_id, parents=[block_id]).start()
-result = classify(candidate)
-token.complete()
+# Layer 0 — Primitive
+token = tel.create("detector", id=product_id, parents=[frame_id]).start()
+result = process(item)
+token.complete()                                     # or token.error({"message": "..."})
 
-# On failure:
-token.error(metadata={"message": "SNR below threshold", "snr": result.snr})
-```
+# Layer 1 — Context manager
+with tel.create("detector", id=product_id, parents=[frame_id]) as token:
+    result = process(item)
+    token.add_event("helix.event.detection_confirmed", {"score": result.score})
 
-**Layer 1 — Context manager:**
-```python
-with tel.create("frb-classifier", id=cand_id, parents=[block_id]) as token:
-    result = classify(candidate)
-    token.add_event("helix.event.candidate_promoted", {"snr": result.snr})
-```
-
-**Layer 2 — Decorator:**
-```python
-@tel.create(
-    "frb-classifier",
-    id=lambda cand: cand.id,
-    parents=lambda cand: [cand.block_id],
-)
-def classify_candidate(cand):
-    return run_classifier(cand)
+# Layer 2 — Decorator
+@tel.create("detector", id=lambda item: item.id, parents=lambda item: [item.frame_id])
+def detect(item):
+    return run_detector(item)
 ```
 
 ---
 
 ### `tel.operate(operation, *, entity_id) → Token`
 
-Return a `Token` for an operation on an existing entity. Always starts a new root OTel trace — independent of the entity's creation trace. The gateway writes an `entity_operations` row so the Entity Inspector shows all traces for that entity across its lifetime.
+Return a `Token` for an operation on an existing entity. Always starts a new root OTel trace independent of the entity's creation trace. The gateway writes an `entity_operations` row so the Entity Inspector shows all traces for that entity across its lifetime.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `operation` | `str` | Operation name shown in Tempo and the Trace panel |
+| `operation` | `str` | Operation name shown in Tempo and the Entity Inspector |
 | `entity_id` | `str` | ID of the existing entity being operated on |
 
 ```python
-with tel.operate("hdf5-conversion", entity_id=event_id) as op:
-    size_mb = write_hdf5(event_id)
-    op.set_attribute("helix.chime.hdf5_size_mb", size_mb)
-    if write_failed:
-        log.error("HDF5 write failed: disk full")
-        op.error({"message": "hdf5_write_error"})
-        return None
-    log.info(f"HDF5 written: {size_mb:.1f} MB")
+with tel.operate("archival", entity_id=result_id) as op:
+    size_mb = write_archive(result_id)
+    op.set_attribute("myinstrument.archive_size_mb", size_mb)
+    log.info(f"archive written: {size_mb:.1f} MB")
 ```
 
-Unhandled exceptions inside the `with` block automatically mark the operation as failed.
-
-If the entity does not exist yet (race condition or late arrival), the gateway creates a minimal placeholder entity so the operation is never orphaned.
+Unhandled exceptions inside the `with` block automatically call `op.error()`.
 
 ---
 
@@ -264,41 +167,43 @@ If the entity does not exist yet (race condition or late arrival), the gateway c
 
 | Method | Description |
 |---|---|
-| `token.start() → Token` | Start the underlying span. Returns `self` for chaining. Called implicitly by the context manager and decorator. |
-| `token.complete(metadata=None)` | End the span successfully. Optional `metadata` dict is set as span attributes. No-op if already done. |
-| `token.error(metadata=None)` | Record a `helix.error` span event, set span status to ERROR, and end the span. No-op if already done. |
-| `token.add_event(name, attributes=None)` | Attach a timestamped `helix.*` event to the span. Written to `entity_events` by the gateway. |
+| `token.start() → Token` | Start the span. Returns `self` for chaining. Called implicitly by context manager and decorator. |
+| `token.complete(metadata=None)` | End the span successfully. Optional `metadata` dict is set as span attributes. No-op after first call. |
+| `token.error(metadata=None)` | Record a `helix.error` span event, set span status to ERROR, end the span. No-op after first call. |
+| `token.add_event(name, attributes=None)` | Attach a timestamped `helix.*` event. Written to `entity_events` by the gateway. |
 | `token.set_attribute(key, value)` | Set a span attribute directly. |
 
 ---
 
 ### `tel.child_span(name, *, parent_id=None, attributes=None)`
 
-Create a child span within an entity's current trace **without registering a new entity**. Use for internal sub-steps that should appear in Tempo's span tree (e.g. RFI mitigation, dedispersion, per-beam clustering) but don't need their own provenance node.
+Create a child span within an entity's current trace **without registering a new entity**. Use for internal sub-steps that should appear in Tempo's span tree but don't need a provenance node.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `name` | `str` | Span name shown in Tempo |
-| `parent_id` | `str \| None` | Entity ID to parent to. Works even after that entity's token is completed. Defaults to the current active context. |
-| `attributes` | `dict \| None` | OTel span attributes to set immediately |
+| `parent_id` | `str \| None` | Entity ID to parent to. Works even after that entity's token is completed. Defaults to current active context. |
+| `attributes` | `dict \| None` | Span attributes to set immediately |
 
 ```python
-with tel.child_span("rfi-mitigation") as span:
-    n_flagged = excise_rfi(data)
-    span.set_attribute("helix.chime.rfi_flagged_channels", n_flagged)
-    log.info(f"RFI mitigation: {n_flagged} channels excised")
+token = tel.create("processor", id=product_id, parents=[frame_id]).start()
 
-# Parent to a completed entity from a different thread
-with tel.child_span("ring-buffer-rpc", parent_id=event_id) as span:
-    data = fetch_ring_buffer()
-    span.set_attribute("helix.chime.buffer_size_mb", len(data) / 1e6)
+with tel.child_span("quality-filter") as span:
+    n_flagged = run_quality_filter(data)
+    span.set_attribute("myinstrument.flagged_channels", n_flagged)
+
+with tel.child_span("signal-processing") as span:
+    trials = run_signal_processing(data)
+    span.set_attribute("myinstrument.trials", trials)
+
+token.complete()
 ```
 
 ---
 
 ### `tel.shutdown()`
 
-Flush all pending spans and shut down the OTLP exporter. Call at process exit to avoid losing the last batch.
+Flush pending spans and shut down the OTLP exporter. Call at process exit to avoid losing the last batch.
 
 ```python
 import atexit
@@ -309,182 +214,117 @@ atexit.register(tel.shutdown)
 
 ### `configure_logging(*, otlp=False)`  _(helixobs.logging)_
 
-Install the helix log-record factory and attach log handlers on the root logger. Call once at startup, before any `logging.getLogger()` calls.
+Install the helix log-record factory. Call once at startup before any `logging.getLogger()` calls.
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `otlp` | `bool` | `False` | When `True`, ship logs via OTLP gRPC to the OTel Collector instead of writing JSON to stdout. |
+| Mode | How to enable | Log delivery |
+|---|---|---|
+| Sidecar (default) | `configure_logging()` | JSON to stdout — a log collector (e.g. Grafana Alloy) ships to Loki |
+| OTLP | `configure_logging(otlp=True)` | Logs shipped via gRPC to the OTel Collector — no sidecar required |
 
-**Sidecar mode (default):** logs go to stdout as newline-delimited JSON. A Grafana Alloy sidecar (or any log collector) picks them up and ships to Loki.
-
-```python
-from helixobs.logging import configure_logging
-configure_logging()          # stdout JSON — Alloy sidecar required
-```
-
-**OTLP mode:** logs are shipped directly to the OTel Collector over gRPC on the same port as traces (`OTEL_EXPORTER_OTLP_ENDPOINT`, default `http://localhost:4317`). No sidecar required. Use this for greenfield services.
-
-```python
-configure_logging(otlp=True) # OTLP gRPC → OTel Collector → Loki
-```
-
-In both modes every log line carries the same helix context fields (populated from the active OTel span):
+In both modes every log line carries helix context fields injected from the active OTel span:
 
 ```json
-{"ts": "2026-04-18T12:00:01", "level": "info", "logger": "chime.simulator", "msg": "candidate classified", "helix_entity_id": "cand-abc123", "helix_instrument_id": "CHIME", "otel_trace_id": "abc...", "otel_span_id": "def..."}
+{"ts": "2026-04-18T12:00:01", "level": "info", "logger": "my.pipeline", "msg": "item processed",
+ "helix_entity_id": "product-abc123", "helix_instrument_id": "MY_INSTRUMENT",
+ "otel_trace_id": "abc...", "otel_span_id": "def..."}
 ```
 
-**Log while the span is active** (before `token.complete()`/`token.error()`) to capture entity context.
-
-Optional environment variables for GitHub source links:
+Optional environment variables for GitHub source links in log lines:
 
 | Variable | Description |
 |---|---|
 | `GITHUB_REPO` | e.g. `https://github.com/myorg/myrepo` |
 | `GIT_COMMIT_SHA` | e.g. `a1b2c3d4` |
 
-When both are set, the `src` field in each log line becomes a full GitHub permalink.
-
 ---
 
-## 6. Integration Patterns
+## 5. Integration Patterns
 
-### Pattern 1 — Primitive (Layer 0)
+### N-to-1 provenance
 
-Best for long-running loops, async code, or anywhere a context manager is awkward.
+A single entity can have multiple parents from independent processing chains. Standard OTel tracing cannot model this — it is the defining feature of HelixObs.
 
 ```python
-block_id = f"block-{uuid.uuid4().hex[:12]}"
-token = tel.create("x-engine", id=block_id).start()
+# Process N partitions independently
+for part_id in partition_ids:
+    with tel.create("partition-processor", id=f"part-{part_id}", parents=[frame_id]):
+        process_partition(part_id)
 
-try:
-    data = ingest_fpga_block()
-    log.info("block ingested")
-    token.complete()
-except Exception as exc:
-    log.exception("ingestion failed")
-    token.error(metadata={"message": str(exc)})
+# Aggregate into one result derived from all N
+with tel.create("aggregator", id=result_id, parents=[f"part-{p}" for p in partition_ids]) as token:
+    result = aggregate(partition_ids)
 ```
 
-### Pattern 2 — Context manager (Layer 1)
+The gateway resolves all parent IDs into OTel span links, so Tempo shows the full DAG.
 
-Best for structured Python code where one `with` block maps to one pipeline stage.
+### Post-creation operations
 
-```python
-with tel.create("frb-classifier", id=cand_id, parents=[block_id]) as token:
-    result = classifier.run(candidate)
-    log.info("candidate classified")
-    if result.snr > 50:
-        token.add_event("helix.event.candidate_promoted", {"snr": result.snr})
-# complete() on clean exit; error() on unhandled exception
-```
-
-### Pattern 3 — Decorator (Layer 2)
-
-Best when one function maps cleanly to one pipeline stage and its arguments carry the entity ID.
+Operations run after an entity's creation trace has closed — even in a separate process. Each gets its own independent trace, all linked to the same entity.
 
 ```python
-@tel.create(
-    "clustering",
-    id=lambda cands: f"event-{uuid.uuid4().hex[:12]}",
-    parents=lambda cands: [c.id for c in cands],
-)
-def cluster_event(cands: list[Candidate]) -> FRBEvent:
-    return run_clustering(cands)
-```
+with tel.operate("archival", entity_id=result_id) as op:
+    size_mb = write_archive(result_id)
+    op.set_attribute("myinstrument.archive_size_mb", size_mb)
+    log.info(f"archive written: {size_mb:.1f} MB")
 
-### Internal sub-steps with `child_span()`
+with tel.operate("catalog-registration", entity_id=result_id) as op:
+    register(result_id)
+    log.info("result registered in catalog")
 
-Use `child_span()` for work that belongs inside one entity's trace — it appears in Tempo as a nested span but creates no DB entity row.
-
-```python
-token = tel.create("l1-search", id=beam_id, parents=[block_id]).start()
-
-with tel.child_span("rfi-mitigation") as span:
-    n = excise_rfi(data)
-    span.set_attribute("helix.chime.rfi_flagged_channels", n)
-
-with tel.child_span("dedispersion") as span:
-    trials = run_dedispersion(data)
-    span.set_attribute("helix.chime.dm_trials", trials)
-
-token.complete()
-```
-
-### Post-creation operations with `operate()`
-
-Use `operate()` for work that happens on an entity after its creation trace has ended — even asynchronously in a separate process.
-
-```python
-# These run after the FRB event entity is fully created and its trace is closed.
-# Each gets its own independent trace, all linked to the same event_id.
-
-with tel.operate("hdf5-conversion", entity_id=event_id) as op:
-    size_mb = write_hdf5(event_id)
-    op.set_attribute("helix.chime.hdf5_size_mb", size_mb)
-    log.info(f"HDF5 written: {size_mb:.1f} MB")
-
-with tel.operate("registration", entity_id=event_id) as op:
-    register_in_catalog(event_id)
-    op.set_attribute("helix.chime.registration_status", "ok")
-    log.info("event registered")
-
-for dest in ["cedar", "niagara"]:
-    with tel.operate("replication", entity_id=event_id) as op:
-        op.set_attribute("helix.chime.replication_dest", dest)
-        if not replicate_to(dest):
-            log.error(f"replication to {dest} failed")
-            op.error({"message": "replication_timeout"})
+for site in ["site-a", "site-b"]:
+    with tel.operate("replication", entity_id=result_id) as op:
+        op.set_attribute("myinstrument.replication_dest", site)
+        if not replicate_to(site):
+            log.error(f"replication to {site} timed out")
+            op.error({"message": "replication_timeout", "dest": site})
 ```
 
 ### Multi-stage pipeline
 
-Each stage creates its own entity. Parent IDs wire the provenance DAG.
+Each stage creates its own entity. Parent IDs wire the full provenance DAG.
 
 ```python
-# Stage 1: ingest
-with tel.create("x-engine", id=block_id) as token:
+# Stage 1: ingest raw observation
+with tel.create("ingestor", id=frame_id) as token:
     ingest()
-    log.info("block ingested")
+    log.info("frame ingested")
 
-# Stage 2: classify (derived from the block)
-with tel.create("frb-classifier", id=cand_id, parents=[block_id]) as token:
-    result = classify()
-    log.info("candidate classified")
+# Stage 2: process (derived from the frame)
+with tel.create("processor", id=product_id, parents=[frame_id]) as token:
+    result = process()
+    log.info("product processed")
 
-# Stage 3: cluster (derived from multiple candidates)
-with tel.create("clustering", id=event_id, parents=cand_ids) as token:
-    event = cluster()
-    log.info("event clustered")
+# Stage 3: aggregate (derived from multiple products)
+with tel.create("aggregator", id=result_id, parents=product_ids) as token:
+    final = aggregate()
+    log.info("result aggregated")
 ```
-
-The gateway stores `parent_ids` for each entity, enabling the recursive provenance DAG query in Grafana.
 
 ---
 
-## 7. Structured Logging
+## 6. Structured Logging
 
-`configure_logging()` installs a JSON formatter. Every `logging` call on any logger emits a JSON object — written to stdout in sidecar mode, or shipped via OTLP gRPC in OTLP mode. No configuration required beyond the one-time call.
+`configure_logging()` installs a JSON formatter on the root logger. Every `logging` call anywhere in the process emits a JSON object while a span is active.
 
-**Log while the span is active** to capture entity context automatically:
+**Log while the span is active** to capture entity context:
 
 ```python
-# CORRECT — log before complete(); factory reads entity ID from active span
-token = tel.create("frb-classifier", id=cand_id, parents=[block_id]).start()
-result = classify()
-log.info("candidate classified")     # helix_entity_id present in output
+# CORRECT — log before complete(); active span provides entity context
+token = tel.create("processor", id=product_id, parents=[frame_id]).start()
+result = process()
+log.info("product processed")   # helix_entity_id present
 token.complete()
 
-# WRONG — span is already ended; factory finds no active span
-token = tel.create("frb-classifier", id=cand_id, parents=[block_id]).start()
-result = classify()
+# WRONG — span has ended; no active span context
+token = tel.create("processor", id=product_id, parents=[frame_id]).start()
+result = process()
 token.complete()
-log.info("candidate classified")     # helix_entity_id missing
+log.info("product processed")   # helix_entity_id missing
 ```
 
-With the context manager pattern this is automatic — the span is active for the entire `with` block.
+With the context manager pattern this is automatic — the span stays active for the entire `with` block.
 
-**JSON log line fields:**
+**Log line fields:**
 
 | Field | Source | Notes |
 |---|---|---|
@@ -492,24 +332,44 @@ With the context manager pattern this is automatic — the span is active for th
 | `level` | Log record | `info`, `warning`, `error`, `debug` |
 | `logger` | Log record | Logger name |
 | `msg` | Log record | Log message |
-| `src` | File + line | Repo-relative path, or GitHub permalink |
-| `helix_entity_id` | Active OTel span | Empty if no active span |
-| `helix_instrument_id` | Active OTel span | Empty if no active span |
+| `src` | File + line | Repo-relative path, or GitHub permalink if env vars set |
+| `helix_entity_id` | Active OTel span | Omitted if no active span |
+| `helix_instrument_id` | Active OTel span | Omitted if no active span |
 | `otel_trace_id` | Active OTel span | 32-hex trace ID |
 | `otel_span_id` | Active OTel span | 16-hex span ID |
 | `exc` | Exception info | Only present when `log.exception()` / `exc_info=True` |
 
-Fields with empty values are omitted from the output to keep lines short.
+> `helix_entity_id` is **not** a Loki stream label — one stream per entity would exhaust Loki's stream limit. Query entity logs with `| json | helix_entity_id = "..."` at query time.
+
+**Sidecar mode log collector (Grafana Alloy reference):**
+
+```alloy
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.docker.containers.targets
+  forward_to = [loki.process.helix_json.receiver]
+}
+
+loki.process "helix_json" {
+  stage.json { expressions = { helix_instrument_id = "", level = "" } }
+  stage.labels { values = { helix_instrument_id = "", level = "" } }
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" { endpoint { url = "http://loki:3100/loki/api/v1/push" } }
+```
+
+Any collector that reads stdout and forwards to Loki works (Promtail, Fluent Bit, Vector). The contract is newline-delimited JSON with `helix_instrument_id` and `level` as top-level fields.
 
 ---
 
-## 8. Data Model
+## 7. Data Model
 
-### entities table
+### entities
 
 | Column | Type | Description |
 |---|---|---|
-| `id` | TEXT | Entity ID (your string) |
+| `id` | TEXT | Entity ID |
 | `instrument_id` | TEXT | Instrument identifier |
 | `trace_id` | TEXT | OTel trace ID linking to Tempo |
 | `timestamp_ns` | BIGINT | Span start time in nanoseconds |
@@ -517,50 +377,46 @@ Fields with empty values are omitted from the output to keep lines short.
 | `metadata` | JSONB | All `helix.*` span attributes |
 | `created_at` | TIMESTAMPTZ | Wall-clock insert time (hypertable partition key) |
 
-### entity_events table
+### entity_events
 
-One row per `helix.*` span event, from any trace associated with the entity (creation or operation).
+One row per `helix.*` span event, from any trace associated with the entity.
 
 | Column | Type | Description |
 |---|---|---|
-| `entity_id` | TEXT | References entities.id |
+| `entity_id` | TEXT | References `entities.id` |
 | `instrument_id` | TEXT | Instrument identifier |
-| `event_name` | TEXT | e.g. `helix.error`, `helix.event.candidate_promoted` |
-| `timestamp_ns` | BIGINT | When the event occurred (from OTel span event) |
-| `trace_id` | TEXT | OTel trace ID — links event to the span that emitted it |
-| `metadata` | JSONB | Event attributes from `token.add_event(name, attributes)` |
+| `event_name` | TEXT | e.g. `helix.error`, `helix.event.detection_confirmed` |
+| `timestamp_ns` | BIGINT | When the event occurred |
+| `trace_id` | TEXT | OTel trace ID of the span that emitted the event |
+| `metadata` | JSONB | Attributes from `token.add_event(name, attributes)` |
 | `created_at` | TIMESTAMPTZ | Wall-clock insert time |
 
-### entity_operations table
+### entity_operations
 
-One row per `tel.operate()` call. Links independent post-creation traces back to their entity.
+One row per `tel.operate()` call.
 
 | Column | Type | Description |
 |---|---|---|
 | `entity_id` | TEXT | The entity being operated on |
 | `instrument_id` | TEXT | Instrument identifier |
-| `operation` | TEXT | Operation name (e.g. `hdf5-conversion`, `registration`, `replication`) |
-| `trace_id` | TEXT | OTel trace ID for this operation — click to open in Tempo |
+| `operation` | TEXT | Operation name (e.g. `archival`, `catalog-registration`, `replication`) |
+| `trace_id` | TEXT | OTel trace ID for this operation — links to Tempo |
 | `timestamp_ns` | BIGINT | Operation start time in nanoseconds |
 | `metadata` | JSONB | Span attributes set inside the `operate()` block |
 | `created_at` | TIMESTAMPTZ | Wall-clock insert time |
 
-An entity can have any number of operation rows — there is no uniqueness constraint on `(entity_id, operation)`.
-
-Data is retained for 90 days and auto-compressed after 7 days (TimescaleDB policies).
+An entity can have any number of operation rows. Data is retained for 90 days and auto-compressed after 7 days (TimescaleDB policies).
 
 ---
 
-## 9. Complete Example
-
-The CHIME mock telescope (`mock-telescope/simulate.py`) is the reference implementation. The pattern below is the recommended structure for any new instrument:
+## 8. Complete Example
 
 ```python
 """
-my_pipeline.py — HelixObs integration for MyTelescope.
+my_pipeline.py — HelixObs integration example.
 
-Environment variables:
-    GATEWAY_ENDPOINT   HelixObs gateway gRPC address (default: localhost:4317)
+Environment:
+    GATEWAY_ENDPOINT   gRPC address of the HelixObs gateway (default: localhost:4317)
 """
 
 import logging
@@ -570,94 +426,100 @@ import uuid
 from helixobs import Instrument
 from helixobs.logging import configure_logging
 
-# ── One-time startup ──────────────────────────────────────────────────────────
+# ── Startup ───────────────────────────────────────────────────────────────────
 
 configure_logging()
 logging.getLogger().setLevel(logging.INFO)
-log = logging.getLogger("mytelescope.pipeline")
+log = logging.getLogger("my.pipeline")
 
 tel = Instrument(
-    service_name="mytelescope.pipeline",
-    instrument_id="MYTELESCOPE",
+    service_name="my-instrument.pipeline",
+    instrument_id="MY_INSTRUMENT",
     endpoint=os.environ.get("GATEWAY_ENDPOINT", "localhost:4317"),
 )
 
-# ── Pipeline stages ───────────────────────────────────────────────────────────
+# ── Stage 1: ingest a raw observation ────────────────────────────────────────
 
-def ingest_block() -> str:
-    block_id = f"block-{uuid.uuid4().hex[:12]}"
-
-    with tel.create("x-engine", id=block_id) as token:
-        data = read_fpga_buffer()
-        log.info("block ingested")
-        token.add_event("helix.event.block_received", {"n_samples": len(data)})
-
-    return block_id
+def ingest_frame() -> str:
+    frame_id = f"frame-{uuid.uuid4().hex[:12]}"
+    with tel.create("ingestor", id=frame_id) as token:
+        data = read_sensor()
+        log.info("frame ingested")
+        token.add_event("helix.event.frame_received", {"n_samples": len(data)})
+    return frame_id
 
 
-def classify_candidate(block_id: str, beam: int) -> str | None:
-    cand_id = f"cand-{uuid.uuid4().hex[:12]}"
-    token = tel.create("frb-classifier", id=cand_id, parents=[block_id]).start()
+# ── Stage 2: process (derived from the frame) ─────────────────────────────────
+
+def process_item(frame_id: str) -> str | None:
+    product_id = f"product-{uuid.uuid4().hex[:12]}"
+    token = tel.create("processor", id=product_id, parents=[frame_id]).start()
 
     try:
-        result = run_classifier(beam)
-        if result.snr < 8.0:
-            log.warning("candidate rejected: low SNR")
-            token.error(metadata={"message": "SNR below threshold", "snr": result.snr})
+        with tel.child_span("quality-filter") as span:
+            n_flagged = run_quality_filter()
+            span.set_attribute("myinstrument.flagged_channels", n_flagged)
+
+        result = run_detector()
+        if result.score < 0.5:
+            log.warning("item rejected: score below threshold")
+            token.error(metadata={"message": "score_below_threshold", "score": result.score})
             return None
 
-        log.info("candidate classified")
-        token.complete()
-        return cand_id
+        log.info("item processed")
+        token.complete(metadata={"score": result.score})
+        return product_id
 
     except Exception as exc:
-        log.exception("classifier failed")
+        log.exception("processing failed")
         token.error(metadata={"message": str(exc)})
         return None
 
 
-def cluster_event(cand_ids: list[str]) -> str | None:
-    if len(cand_ids) < 2:
+# ── Stage 3: aggregate N products into one result (N-to-1 provenance) ─────────
+
+def aggregate(product_ids: list[str]) -> str | None:
+    if len(product_ids) < 2:
         return None
 
-    event_id = f"frb-{uuid.uuid4().hex[:12]}"
-    with tel.create("clustering", id=event_id, parents=cand_ids) as token:
-        event = run_clustering(cand_ids)
-        log.info("event clustered")
-        token.add_event("helix.event.frb_candidate", {
-            "ra":             event.ra,
-            "dec":            event.dec,
-            "classification": event.classification,
+    result_id = f"result-{uuid.uuid4().hex[:12]}"
+    with tel.create("aggregator", id=result_id, parents=product_ids) as token:
+        result = run_aggregation(product_ids)
+        log.info("result aggregated")
+        token.add_event("helix.event.detection_confirmed", {
+            "score":          result.score,
+            "classification": result.classification,
         })
 
-    return event_id
+    return result_id
 
 
-def post_detection(event_id: str) -> None:
-    with tel.operate("hdf5-conversion", entity_id=event_id) as op:
-        size_mb = write_hdf5(event_id)
-        op.set_attribute("helix.chime.hdf5_size_mb", size_mb)
-        log.info(f"HDF5 written: {size_mb:.1f} MB")
+# ── Post-creation operations ───────────────────────────────────────────────────
 
-    with tel.operate("registration", entity_id=event_id) as op:
-        register_in_catalog(event_id)
-        log.info("event registered")
+def archive_and_distribute(result_id: str) -> None:
+    with tel.operate("archival", entity_id=result_id) as op:
+        size_mb = write_archive(result_id)
+        op.set_attribute("myinstrument.archive_size_mb", size_mb)
+        log.info(f"archive written: {size_mb:.1f} MB")
 
-    for dest in ["cedar", "niagara"]:
-        with tel.operate("replication", entity_id=event_id) as op:
-            op.set_attribute("helix.chime.replication_dest", dest)
-            if not replicate_to(dest):
-                log.error(f"replication to {dest} timed out")
-                op.error({"message": "replication_timeout", "dest": dest})
+    with tel.operate("catalog-registration", entity_id=result_id) as op:
+        register(result_id)
+        log.info("result registered in catalog")
+
+    for site in ["site-a", "site-b"]:
+        with tel.operate("replication", entity_id=result_id) as op:
+            op.set_attribute("myinstrument.replication_dest", site)
+            if not replicate_to(site):
+                log.error(f"replication to {site} timed out")
+                op.error({"message": "replication_timeout", "dest": site})
 ```
 
 ---
 
 ### Grafana dashboards
 
-Once data is flowing, two dashboards are available out of the box:
-
 | Dashboard | URL | Description |
 |---|---|---|
-| **Entity Inspector** | `http://localhost:3001/d/helix-entity-inspector` | Enter any entity ID. Shows provenance DAG, metadata, events, span tree, and correlated logs. |
-| **Error Entities** | `http://localhost:3001/d/helix-error-entities` | Table of all failed entities with error rate chart. Click any row to open Entity Inspector. |
+| **Entity Inspector** | `http://localhost:3001/d/helix-entity-inspector` | Provenance DAG, metadata, events, span tree, and correlated logs for any entity ID |
+| **Error Entities** | `http://localhost:3001/d/helix-error-entities` | Table of all failed entities with error rate chart |
+| **Platform Health** | `http://localhost:3001/d/helix-platform-health` | Gateway throughput, DB write latency, trace store, backend health |
