@@ -36,10 +36,7 @@ set as helix.parent.ids; the gateway resolves them server-side.
 """
 
 import functools
-import logging
 from typing import Callable, Union
-
-_log = logging.getLogger("helixobs.instrument")
 
 from opentelemetry import context as context_api
 from opentelemetry import trace
@@ -113,7 +110,6 @@ class Token:
         attrs = {k: str(v) for k, v in (metadata or {}).items()}
         self._span.add_event("helix.error", attributes=attrs)
         self._span.set_status(StatusCode.ERROR)
-        _log.error(attrs.get("message", "entity error"))
         context_api.detach(self._ctx_token)
         self._span.end()
 
