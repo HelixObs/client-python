@@ -4,7 +4,7 @@ Core library code. Entry point is `Instrument` in `instrument.py`.
 
 ## Files
 
-- **instrument.py** — `Instrument`, `Token`, `_StageHelper`, `_OperationHandle`. All pipeline-facing API lives here.
+- **instrument.py** — `Instrument`, `Token`. All pipeline-facing API lives here.
 - **_store.py** — `TraceStore`: thread-safe bounded dict mapping `entity_id → SpanContext`. Used to resolve in-process parents into OTel `Link`s. Operations do NOT overwrite entity entries here.
 - **logging.py** — `configure_logging(*, otlp=False)`: installs a log-record factory that injects `otelTraceID`, `otelSpanID`, `helixEntityID`, `helixInstrumentID` into every log record while a span is active. Default mode writes JSON to stdout (sidecar collection). `otlp=True` ships logs via `OTLPLogExporter` over gRPC to the OTel Collector — no sidecar required.
 - **chime/** — `CHIMEInstrument` subclass + CHIME semantic convention attribute constants.
@@ -24,7 +24,7 @@ Do not rename these without updating the gateway interceptor constants (`attrEnt
 
 ## Entity vs Operation
 
-| | `track()` / `stage()` | `operate()` |
+| | `create()` | `operate()` |
 |---|---|---|
 | Creates entity row | Yes | No (upserts placeholder if missing) |
 | Creates operation row | No | Yes |

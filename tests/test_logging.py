@@ -56,38 +56,38 @@ class TestFactoryOutsideSpan:
 class TestFactoryInsideSpan:
     def test_trace_id_injected_inside_span(self, instrument):
         helix_logging.configure_logging()
-        token = instrument.track("stage", id="entity-1")
+        token = instrument.create("stage", id="entity-1").start()
         record = _make_record()
-        instrument.complete(token)
+        token.complete()
         assert record.otel_trace_id != ""
         assert len(record.otel_trace_id) == 32  # 128-bit trace ID as hex
 
     def test_span_id_injected_inside_span(self, instrument):
         helix_logging.configure_logging()
-        token = instrument.track("stage", id="entity-1")
+        token = instrument.create("stage", id="entity-1").start()
         record = _make_record()
-        instrument.complete(token)
+        token.complete()
         assert record.otel_span_id != ""
         assert len(record.otel_span_id) == 16  # 64-bit span ID as hex
 
     def test_entity_id_injected_inside_span(self, instrument):
         helix_logging.configure_logging()
-        token = instrument.track("stage", id="my-entity")
+        token = instrument.create("stage", id="my-entity").start()
         record = _make_record()
-        instrument.complete(token)
+        token.complete()
         assert record.helix_entity_id == "my-entity"
 
     def test_ids_empty_after_span_ends(self, instrument):
         helix_logging.configure_logging()
-        token = instrument.track("stage", id="entity-1")
-        instrument.complete(token)
+        token = instrument.create("stage", id="entity-1").start()
+        token.complete()
         record = _make_record()
         assert record.otel_trace_id == ""
 
     def test_context_manager_injects_during_block(self, instrument):
         helix_logging.configure_logging()
         records: list[logging.LogRecord] = []
-        with instrument.stage("stage", id="block-1"):
+        with instrument.create("stage", id="block-1"):
             records.append(_make_record("inside"))
         records.append(_make_record("outside"))
         assert records[0].otel_trace_id != ""

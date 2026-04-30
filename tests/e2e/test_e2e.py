@@ -102,8 +102,8 @@ def scrape_total(metric_name: str) -> float:
 @pytest.mark.timeout(60)
 def test_entity_appears_in_db(instrument, db):
     entity_id = f"e2e-{uuid.uuid4().hex[:12]}"
-    token = instrument.track("stage", id=entity_id)
-    instrument.complete(token)
+    token = instrument.create("stage", id=entity_id).start()
+    token.complete()
     instrument._provider.force_flush(timeout_millis=5_000)
 
     assert poll(lambda: entity_in_db(db, entity_id)), \
@@ -116,10 +116,10 @@ def test_parent_ids_stored(instrument, db):
     parent_id = f"e2e-parent-{uuid.uuid4().hex[:12]}"
     child_id  = f"e2e-child-{uuid.uuid4().hex[:12]}"
 
-    pt = instrument.track("stage-a", id=parent_id)
-    instrument.complete(pt)
-    ct = instrument.track("stage-b", id=child_id, parents=[parent_id])
-    instrument.complete(ct)
+    pt = instrument.create("stage-a", id=parent_id).start()
+    pt.complete()
+    ct = instrument.create("stage-b", id=child_id, parents=[parent_id]).start()
+    ct.complete()
     instrument._provider.force_flush(timeout_millis=5_000)
 
     def child_has_parent():
@@ -137,8 +137,8 @@ def test_parent_ids_stored(instrument, db):
 def test_entities_total_counter_increments(instrument, db):
     before = scrape_total("helix_entities_total")
     entity_id = f"e2e-counter-{uuid.uuid4().hex[:12]}"
-    token = instrument.track("stage", id=entity_id)
-    instrument.complete(token)
+    token = instrument.create("stage", id=entity_id).start()
+    token.complete()
     instrument._provider.force_flush(timeout_millis=5_000)
 
     assert poll(lambda: scrape_total("helix_entities_total") > before), \
@@ -149,8 +149,8 @@ def test_entities_total_counter_increments(instrument, db):
 @pytest.mark.timeout(60)
 def test_error_event_recorded(instrument, db):
     entity_id = f"e2e-err-{uuid.uuid4().hex[:12]}"
-    token = instrument.track("stage", id=entity_id)
-    instrument.error(token, {"message": "something went wrong"})
+    token = instrument.create("stage", id=entity_id).start()
+    token.error({"message": "something went wrong"})
     instrument._provider.force_flush(timeout_millis=5_000)
 
     assert poll(lambda: entity_in_db(db, entity_id)), \
@@ -172,8 +172,8 @@ def test_error_event_recorded(instrument, db):
 @pytest.mark.timeout(60)
 def test_operate_creates_operation_row(instrument, db):
     entity_id = f"e2e-op-{uuid.uuid4().hex[:12]}"
-    token = instrument.track("clustering", id=entity_id)
-    instrument.complete(token)
+    token = instrument.create("clustering", id=entity_id).start()
+    token.complete()
     instrument._provider.force_flush(timeout_millis=5_000)
 
     with instrument.operate("hdf5-conversion", entity_id=entity_id) as op:
@@ -196,12 +196,12 @@ def test_operate_creates_operation_row(instrument, db):
 @pytest.mark.timeout(60)
 def test_operate_fail_records_error_event(instrument, db):
     entity_id = f"e2e-opfail-{uuid.uuid4().hex[:12]}"
-    token = instrument.track("clustering", id=entity_id)
-    instrument.complete(token)
+    token = instrument.create("clustering", id=entity_id).start()
+    token.complete()
     instrument._provider.force_flush(timeout_millis=5_000)
 
     with instrument.operate("registration", entity_id=entity_id) as op:
-        op.fail("voevent_timeout")
+        op.error({"message": "voevent_timeout"})
     instrument._provider.force_flush(timeout_millis=5_000)
 
     def error_event_in_db():
@@ -248,15 +248,15 @@ def test_n_to_1_provenance_chain(instrument, db):
     cand_ids = [f"e2e-cand-{uuid.uuid4().hex[:8]}" for _ in range(3)]
     event_id = f"e2e-event-{uuid.uuid4().hex[:12]}"
 
-    bt = instrument.track("x-engine", id=block_id)
-    instrument.complete(bt)
+    bt = instrument.create("x-engine", id=block_id).start()
+    bt.complete()
 
     for cid in cand_ids:
-        ct = instrument.track("classifier", id=cid, parents=[block_id])
-        instrument.complete(ct)
+        ct = instrument.create("classifier", id=cid, parents=[block_id]).start()
+        ct.complete()
 
-    et = instrument.track("clustering", id=event_id, parents=cand_ids)
-    instrument.complete(et)
+    et = instrument.create("clustering", id=event_id, parents=cand_ids).start()
+    et.complete()
     instrument._provider.force_flush(timeout_millis=5_000)
 
     def event_has_all_parents():
