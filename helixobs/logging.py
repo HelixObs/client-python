@@ -47,6 +47,23 @@ import re
 from opentelemetry import trace
 
 
+def install_context_fields() -> None:
+    """Inject helix context fields into log records without touching handlers.
+
+    Use this when your pipeline already has its own logging setup (rotating file
+    handlers, dictConfig, etc.). Existing handlers and formatters are untouched —
+    helix_entity_id, helix_instrument_id, otel_trace_id, and otel_span_id are
+    added to every record and can be referenced in your existing format string.
+
+    Note: context fields are populated from the active OTel span on the calling
+    thread. Logs emitted from worker threads won't carry entity context unless
+    the span context is propagated explicitly via copy_context().
+
+    Safe to call multiple times — subsequent calls are no-ops.
+    """
+    _install_factory()
+
+
 def configure_logging(*, otlp: bool = False) -> None:
     """Install the helix factory and attach log handlers on the root logger.
 
