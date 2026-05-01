@@ -6,6 +6,8 @@ is created in the same process.  For cross-process parents, the gateway
 resolves them server-side using the helix.parent.ids span attribute.
 """
 
+from __future__ import annotations
+
 import threading
 from opentelemetry.trace import SpanContext
 
