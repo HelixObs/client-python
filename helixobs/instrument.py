@@ -197,6 +197,9 @@ class Instrument:
         self._tracer = trace.get_tracer("helixobs", tracer_provider=provider)
         self._provider = provider
 
+        from .logging import update_log_service_name
+        update_log_service_name(service_name)
+
     # ── Internal span factory ─────────────────────────────────────────
 
     def _resolve_links(self, parent_ids: list[str]) -> tuple[list[Link], list[str]]:

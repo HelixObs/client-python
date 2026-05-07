@@ -29,7 +29,7 @@ Your pipeline process connects to a single endpoint. The full HelixObs stack run
 
 > In both modes your pipeline makes no HTTP calls and no direct database calls. All telemetry flows through gRPC.
 
-> **Two endpoints, not one.** The gateway (`4317`) handles entity traces. The OTel Collector (`4319`) handles logs. When using `configure_logging(otlp=True)`, set `OTEL_EXPORTER_OTLP_ENDPOINT` to the collector endpoint, not the gateway.
+> **Two endpoints, not one.** The gateway (`4317`) handles entity traces. The OTel Collector (`4319`) handles logs. The `setup()` function wires both with a single `service_name` — use it unless you need fine-grained control.
 
 ### Stack components
 
@@ -103,6 +103,27 @@ When you pass `parents=["input-abc"]`, the library checks its in-process store f
 ---
 
 ## 4. API Reference
+
+### `setup(service_name, *, instrument_id, endpoint, insecure, otlp, log_endpoint) → Instrument`
+
+The recommended entry point. Configures logging and returns a ready-to-use `Instrument` — both stamped with the same `service_name`.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `service_name` | `str` | — | OTel service name for traces and logs. e.g. `"chime.l1"` |
+| `instrument_id` | `str` | — | Instrument identifier stamped on every entity span |
+| `endpoint` | `str` | `"localhost:4317"` | Gateway gRPC address for traces |
+| `insecure` | `bool` | `True` | Plaintext gRPC |
+| `otlp` | `bool` | `False` | Ship logs via OTLP. When `False`, JSON is written to stdout |
+| `log_endpoint` | `str \| None` | `None` | OTel Collector gRPC address for logs. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` env var, then `http://localhost:4319` |
+
+```python
+from helixobs import setup
+
+tel = setup("chime.l1", instrument_id="CHIME", endpoint="gateway:4317", otlp=True)
+```
+
+---
 
 ### `Instrument(service_name, instrument_id, endpoint, insecure)`
 
@@ -215,14 +236,16 @@ atexit.register(tel.shutdown)
 
 ---
 
-### `configure_logging(*, otlp=False)`  _(helixobs.logging)_
+### `configure_logging(*, otlp=False, service_name=None)`  _(helixobs.logging)_
 
-Install the helix log-record factory. Call once at startup before any `logging.getLogger()` calls.
+Install the helix log-record factory. Prefer `setup()` for the common case — use this directly only when you need logs without traces.
 
 | Mode | How to enable | Log delivery |
 |---|---|---|
 | Sidecar (default) | `configure_logging()` | JSON to stdout — a log collector (e.g. Grafana Alloy) ships to Loki |
-| OTLP | `configure_logging(otlp=True)` | Logs shipped via gRPC to the OTel Collector — no sidecar required |
+| OTLP | `configure_logging(otlp=True, service_name="my.service")` | Logs shipped via gRPC to the OTel Collector — no sidecar required |
+
+`service_name` is **required** when `otlp=True` — raises `ValueError` if omitted. When `Instrument` is also used, it overwrites the log provider resource with its own `service_name`.
 
 In both modes every log line carries helix context fields injected from the active OTel span:
 
@@ -419,29 +442,27 @@ An entity can have any number of operation rows. Data is retained for 90 days an
 my_pipeline.py — HelixObs integration example.
 
 Environment:
-    GATEWAY_ENDPOINT     gRPC address of the HelixObs gateway (default: localhost:4317)
+    GATEWAY_ENDPOINT             gRPC address of the HelixObs gateway (default: localhost:4317)
     OTEL_EXPORTER_OTLP_ENDPOINT  gRPC address of the OTel Collector for log shipping
-                                 (default: http://localhost:4319) — set when using
-                                 configure_logging(otlp=True) from outside Docker.
+                                 (default: http://localhost:4319)
 """
 
 import logging
 import os
 import uuid
 
-from helixobs import Instrument
-from helixobs.logging import configure_logging
+from helixobs import setup
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 
-configure_logging()
 logging.getLogger().setLevel(logging.INFO)
 log = logging.getLogger("my.pipeline")
 
-tel = Instrument(
-    service_name="my-instrument.pipeline",
+tel = setup(
+    "my-instrument.pipeline",
     instrument_id="MY_INSTRUMENT",
     endpoint=os.environ.get("GATEWAY_ENDPOINT", "localhost:4317"),
+    otlp=True,
 )
 
 # ── Stage 1: ingest a raw observation ────────────────────────────────────────

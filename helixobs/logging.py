@@ -64,18 +64,27 @@ def install_context_fields() -> None:
     _install_factory()
 
 
-def configure_logging(*, otlp: bool = False) -> None:
+def configure_logging(*, otlp: bool = False, service_name: str | None = None) -> None:
     """Install the helix factory and attach log handlers on the root logger.
 
     Args:
-        otlp: When True, ship logs via OTLP gRPC instead of stdout JSON.
-              Requires ``opentelemetry-exporter-otlp-proto-grpc``.
+        otlp:         When True, ship logs via OTLP gRPC instead of stdout JSON.
+                      Requires ``opentelemetry-exporter-otlp-proto-grpc``.
+        service_name: Required when ``otlp=True``. Stamped on every log record so
+                      logs are queryable by service in Loki. If ``Instrument`` is
+                      also used, it overwrites the log provider resource with its
+                      own ``service_name``.
 
     Safe to call multiple times — subsequent calls are no-ops.
     """
     _install_factory()
     if otlp:
-        _install_otlp_handler()
+        if not service_name:
+            raise ValueError(
+                "configure_logging(otlp=True) requires service_name. "
+                "Pass the same value you use for Instrument(service_name=...)."
+            )
+        _install_otlp_handler(service_name=service_name)
     else:
         _install_json_handler()
 
@@ -126,9 +135,27 @@ def _install_json_handler() -> None:
 
 
 _otlp_handler_installed = False
+_log_provider = None  # set when OTLP handler is installed
 
 
-def _install_otlp_handler() -> None:
+def update_log_service_name(service_name: str) -> None:
+    """Overwrite the log provider resource's service.name.
+
+    Called by Instrument.__init__ so that logs always match the trace
+    service_name, even if configure_logging() was called first with a
+    different name.  No-op if OTLP logging was not configured.
+    """
+    if _log_provider is None:
+        return
+    try:
+        from opentelemetry.sdk.resources import Resource
+        resource = Resource.create({"service.name": service_name})
+        _log_provider._resource = resource  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
+def _install_otlp_handler(service_name: str) -> None:
     global _otlp_handler_installed
     if _otlp_handler_installed:
         return
@@ -138,7 +165,6 @@ def _install_otlp_handler() -> None:
         from opentelemetry._logs import set_logger_provider
         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
         from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.resources import Resource
     except ImportError as exc:
         raise ImportError(
@@ -147,12 +173,16 @@ def _install_otlp_handler() -> None:
         ) from exc
 
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-    resource = Resource.create()
+    resource = Resource.create({"service.name": service_name})
+
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
     provider = LoggerProvider(resource=resource)
     provider.add_log_record_processor(
         BatchLogRecordProcessor(OTLPLogExporter(endpoint=endpoint, insecure=True))
     )
+    global _log_provider
+    _log_provider = provider
     set_logger_provider(provider)
 
     handler = LoggingHandler(logger_provider=provider)

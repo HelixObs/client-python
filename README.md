@@ -17,17 +17,17 @@ Requires Python 3.11+.
 ## Quick start
 
 ```python
-from helixobs import Instrument
-from helixobs.logging import configure_logging
+from helixobs import setup
 import logging
 
-configure_logging()
 log = logging.getLogger("my.pipeline")
 
-tel = Instrument(
-    service_name="my-instrument.pipeline",
+# One call wires both traces and logs with matching service name
+tel = setup(
+    "my-instrument.pipeline",
     instrument_id="MY_INSTRUMENT",
     endpoint="gateway:4317",
+    otlp=True,               # ship logs via OTLP to the collector (port 4319)
 )
 
 # Track an entity through a pipeline stage
@@ -38,6 +38,15 @@ with tel.create("detector", id=product_id, parents=[frame_id]) as token:
         token.add_event("helix.event.detection_confirmed", {"score": result.score})
 # complete() called on exit; error() called on unhandled exception
 ```
+
+**Two OTLP endpoints:**
+
+| Endpoint | Default port | Purpose |
+|---|---|---|
+| HelixObs Gateway | `4317` | OTLP traces — entity spans |
+| OTel Collector | `4319` | OTLP logs — structured log shipping |
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://<host>:4319` for log shipping, or pass `log_endpoint` to `setup()`.
 
 See [USER_GUIDE.md](USER_GUIDE.md) for the full API reference, integration patterns, structured logging, and data model.
 
