@@ -10,15 +10,21 @@ import helixobs.logging as helix_logging
 
 @pytest.fixture(autouse=True)
 def reset_logging_factory(monkeypatch):
-    """Restore the original log-record factory after each test."""
+    """Restore the original log-record factory and handler guards after each test."""
     original = logging.getLogRecordFactory()
     helix_logging._installed = False
+    helix_logging._json_handler_installed = False
+    helix_logging._otlp_handler_installed = False
+    helix_logging._log_provider = None
     # Ensure env vars used by the factory are absent unless a test sets them.
     monkeypatch.delenv("GITHUB_REPO",    raising=False)
     monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
     yield
     logging.setLogRecordFactory(original)
     helix_logging._installed = False
+    helix_logging._json_handler_installed = False
+    helix_logging._otlp_handler_installed = False
+    helix_logging._log_provider = None
 
 
 def _make_record(msg: str = "test") -> logging.LogRecord:
@@ -165,3 +171,26 @@ class TestNormalizePath:
         with mock.patch("os.path.relpath", side_effect=ValueError):
             result = helix_logging._normalize_path("/some/abs/path/file.py", "file.py")
         assert result == "file.py"
+
+
+class TestOtlpRequiresServiceName:
+    def test_raises_without_service_name(self):
+        with pytest.raises(ValueError, match="service_name"):
+            helix_logging.configure_logging(otlp=True)
+
+    def test_raises_with_empty_service_name(self):
+        with pytest.raises(ValueError, match="service_name"):
+            helix_logging.configure_logging(otlp=True, service_name="")
+
+    def test_no_error_without_otlp(self):
+        # service_name is ignored in stdout mode — no error
+        helix_logging.configure_logging(otlp=False, service_name=None)
+
+
+class TestUpdateLogServiceName:
+    def test_noop_when_otlp_not_configured(self):
+        # _log_provider is None — must not raise
+        helix_logging.update_log_service_name("my-service")
+
+    def test_noop_with_empty_string(self):
+        helix_logging.update_log_service_name("")
