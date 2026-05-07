@@ -6,6 +6,7 @@ Convenience entry point that wires traces and logs in one call.
 
 from __future__ import annotations
 
+import inspect
 from typing import Type, TypeVar
 
 from .instrument import Instrument
@@ -17,7 +18,7 @@ T = TypeVar("T", bound=Instrument)
 def setup(
     service_name: str,
     *,
-    instrument_id: str,
+    instrument_id: str | None = None,
     endpoint: str = "localhost:4317",
     insecure: bool = True,
     otlp: bool = False,
@@ -35,7 +36,9 @@ def setup(
         OTel service name — identifies this pipeline in Tempo and Loki.
         e.g. ``"chime.l1"``
     instrument_id:
-        Instrument identifier stamped on every entity span. e.g. ``"CHIME"``
+        Instrument identifier stamped on every entity span. e.g. ``"CHIME"``.
+        Required when using the base ``Instrument`` class. Omit when using a
+        domain subclass that hard-codes its own ID (e.g. ``CHIMEInstrument``).
     endpoint:
         OTLP gRPC endpoint of the HelixObs gateway for traces.
         Default: ``"localhost:4317"``
@@ -63,12 +66,12 @@ def setup(
 
         from helixobs import setup
 
-        # Standard usage
-        tel = setup("chime.l1", instrument_id="CHIME", endpoint="gateway:4317", otlp=True)
+        # Base Instrument — instrument_id required
+        tel = setup("my.pipeline", instrument_id="MY_INST", endpoint="gateway:4317", otlp=True)
 
-        # With a domain subclass
+        # Domain subclass — instrument_id owned by the class, not the caller
         from chime import CHIMEInstrument
-        tel = setup("chime.simulator", instrument_id="CHIME", endpoint="gateway:4317",
+        tel = setup("chime.simulator", endpoint="gateway:4317",
                     otlp=True, instrument_class=CHIMEInstrument)
     """
     import os
@@ -78,9 +81,14 @@ def setup(
 
     configure_logging(otlp=otlp, service_name=service_name if otlp else None)
 
-    return instrument_class(
-        service_name=service_name,
-        instrument_id=instrument_id,
-        endpoint=endpoint,
-        insecure=insecure,
-    )
+    sig = inspect.signature(instrument_class.__init__)
+    kwargs: dict = dict(service_name=service_name, endpoint=endpoint, insecure=insecure)
+    if "instrument_id" in sig.parameters:
+        if instrument_id is None:
+            raise ValueError(
+                "instrument_id is required when using the base Instrument class. "
+                "Pass instrument_id=... to setup()."
+            )
+        kwargs["instrument_id"] = instrument_id
+
+    return instrument_class(**kwargs)

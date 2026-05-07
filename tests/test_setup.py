@@ -15,7 +15,6 @@ from helixobs.setup import setup
 
 @pytest.fixture(autouse=True)
 def reset_logging(monkeypatch):
-    """Reset logging state and patch Instrument.__init__ to avoid global tracer side-effects."""
     helix_logging._installed = False
     helix_logging._json_handler_installed = False
     helix_logging._otlp_handler_installed = False
@@ -55,16 +54,39 @@ class TestSetupReturnsInstrument:
         tel = setup("svc.test", instrument_id="MY_INST")
         assert tel.instrument_id == "MY_INST"
 
-    def test_returns_subclass_when_instrument_class_given(self, patched_instrument):
-        class MyInstrument(Instrument):
-            pass
+    def test_raises_when_base_class_and_no_instrument_id(self, patched_instrument):
+        with pytest.raises(ValueError, match="instrument_id"):
+            setup("svc.test")
 
-        tel = setup("svc.test", instrument_id="TEST", instrument_class=MyInstrument)
-        assert isinstance(tel, MyInstrument)
+    def test_subclass_without_instrument_id_does_not_raise(self):
+        """A subclass that owns its own instrument_id needs no instrument_id from caller."""
+        class SelfNamingInstrument(Instrument):
+            def __init__(self, service_name, *, endpoint="localhost:4317", insecure=True):
+                # doesn't call super() — just records what it was given
+                self.instrument_id = "SELF"
+                self.service_name = service_name
 
-    def test_subclass_is_not_base_instrument(self, patched_instrument):
+        tel = setup("svc.test", instrument_class=SelfNamingInstrument)
+        assert isinstance(tel, SelfNamingInstrument)
+        assert tel.instrument_id == "SELF"
+
+    def test_subclass_instrument_id_not_passed_when_not_in_signature(self):
+        """instrument_id must not be forwarded to constructors that don't accept it."""
+        received: dict = {}
+
+        class DomainInstrument(Instrument):
+            def __init__(self, service_name, *, endpoint="localhost:4317", insecure=True):
+                received["kwargs"] = dict(service_name=service_name,
+                                          endpoint=endpoint, insecure=insecure)
+                self.instrument_id = "DOMAIN"
+
+        setup("svc.test", instrument_id="IGNORED", instrument_class=DomainInstrument)
+        assert "instrument_id" not in received["kwargs"]
+
+    def test_returns_subclass_type(self):
         class MyInstrument(Instrument):
-            pass
+            def __init__(self, service_name, *, instrument_id, endpoint, insecure):
+                self.instrument_id = instrument_id
 
         tel = setup("svc.test", instrument_id="TEST", instrument_class=MyInstrument)
         assert type(tel) is MyInstrument
@@ -84,9 +106,6 @@ class TestSetupLogging:
 class TestSetupLogEndpoint:
     def test_log_endpoint_sets_env_var(self, patched_instrument, monkeypatch):
         monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-        # Use otlp=False so we don't try to connect — just verify env var is set
-        # when log_endpoint is provided alongside otlp=True.
-        # We mock _install_otlp_handler to avoid a real connection attempt.
         with mock.patch.object(helix_logging, "_install_otlp_handler"):
             setup("svc.test", instrument_id="TEST", otlp=True, log_endpoint="http://host:4319")
         assert os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "http://host:4319"
@@ -95,5 +114,4 @@ class TestSetupLogEndpoint:
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://existing:4317")
         with mock.patch.object(helix_logging, "_install_otlp_handler"):
             setup("svc.test", instrument_id="TEST", otlp=True, log_endpoint="http://new:4319")
-        # setdefault must not overwrite an existing value
         assert os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://existing:4317"
