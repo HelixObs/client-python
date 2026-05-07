@@ -6,8 +6,12 @@ Convenience entry point that wires traces and logs in one call.
 
 from __future__ import annotations
 
+from typing import Type, TypeVar
+
 from .instrument import Instrument
 from .logging import configure_logging
+
+T = TypeVar("T", bound=Instrument)
 
 
 def setup(
@@ -18,7 +22,8 @@ def setup(
     insecure: bool = True,
     otlp: bool = False,
     log_endpoint: str | None = None,
-) -> Instrument:
+    instrument_class: Type[T] = Instrument,
+) -> T:
     """Configure logging and return a ready-to-use Instrument.
 
     This is the recommended entry point for most pipelines. It ensures
@@ -43,10 +48,13 @@ def setup(
         OTLP gRPC endpoint for log shipping. Only used when ``otlp=True``.
         Defaults to the value of ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var,
         or ``"http://localhost:4319"`` if unset.
+    instrument_class:
+        Instrument subclass to instantiate. Use when your domain subclasses
+        ``Instrument`` (e.g. ``CHIMEInstrument``). Default: ``Instrument``.
 
     Returns
     -------
-    Instrument
+    Instrument (or subclass)
         Ready to use for ``tel.create()`` and ``tel.operate()``.
 
     Example
@@ -54,13 +62,14 @@ def setup(
     ::
 
         from helixobs import setup
-        import logging
 
-        log = logging.getLogger(__name__)
+        # Standard usage
         tel = setup("chime.l1", instrument_id="CHIME", endpoint="gateway:4317", otlp=True)
 
-        with tel.create("l1-search", id=beam_id) as token:
-            log.info("beam processed")   # helix_entity_id present
+        # With a domain subclass
+        from chime import CHIMEInstrument
+        tel = setup("chime.simulator", instrument_id="CHIME", endpoint="gateway:4317",
+                    otlp=True, instrument_class=CHIMEInstrument)
     """
     import os
 
@@ -69,7 +78,7 @@ def setup(
 
     configure_logging(otlp=otlp, service_name=service_name if otlp else None)
 
-    return Instrument(
+    return instrument_class(
         service_name=service_name,
         instrument_id=instrument_id,
         endpoint=endpoint,
