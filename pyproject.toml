@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "helixobs"
-version = "0.2.2"
+version = "0.3.0"
 description = "Entity-centric observability client for scientific instrument pipelines"
 readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }
