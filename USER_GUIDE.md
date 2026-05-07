@@ -24,9 +24,12 @@ Your pipeline process connects to a single endpoint. The full HelixObs stack run
 | Requirement | Details |
 |---|---|
 | **HelixObs Gateway** | gRPC endpoint (default `localhost:4317`). Every `create()`/`operate()` call sends an OTLP span here. |
+| **OTel Collector** | gRPC endpoint (default `localhost:4319`). Required for OTLP log shipping — the gateway handles traces only. |
 | **Log delivery** | Sidecar mode (default) or OTLP mode — see [Structured Logging](#6-structured-logging). |
 
 > In both modes your pipeline makes no HTTP calls and no direct database calls. All telemetry flows through gRPC.
+
+> **Two endpoints, not one.** The gateway (`4317`) handles entity traces. The OTel Collector (`4319`) handles logs. When using `configure_logging(otlp=True)`, set `OTEL_EXPORTER_OTLP_ENDPOINT` to the collector endpoint, not the gateway.
 
 ### Stack components
 
@@ -416,7 +419,10 @@ An entity can have any number of operation rows. Data is retained for 90 days an
 my_pipeline.py — HelixObs integration example.
 
 Environment:
-    GATEWAY_ENDPOINT   gRPC address of the HelixObs gateway (default: localhost:4317)
+    GATEWAY_ENDPOINT     gRPC address of the HelixObs gateway (default: localhost:4317)
+    OTEL_EXPORTER_OTLP_ENDPOINT  gRPC address of the OTel Collector for log shipping
+                                 (default: http://localhost:4319) — set when using
+                                 configure_logging(otlp=True) from outside Docker.
 """
 
 import logging
