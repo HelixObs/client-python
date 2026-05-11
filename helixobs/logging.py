@@ -104,6 +104,7 @@ class _HelixJsonFormatter(logging.Formatter):
             "src":                   getattr(record, "helix_source", ""),
             "helix_entity_id":       getattr(record, "helix_entity_id", ""),
             "helix_instrument_id":   getattr(record, "helix_instrument_id", ""),
+            "helix_process_name":    getattr(record, "helix_process_name", ""),
             "otel_trace_id":         getattr(record, "otel_trace_id", ""),
             "otel_span_id":          getattr(record, "otel_span_id", ""),
         }
@@ -138,18 +139,29 @@ _otlp_handler_installed = False
 _log_provider = None  # set when OTLP handler is installed
 
 
-def update_log_service_name(service_name: str) -> None:
-    """Overwrite the log provider resource's service.name.
+_process_name: str = ""
+
+
+def update_log_service_name(
+    service_name: str, *, process_name: str | None = None
+) -> None:
+    """Overwrite the log provider resource's service.name (and optionally helix.process.name).
 
     Called by Instrument.__init__ so that logs always match the trace
     service_name, even if configure_logging() was called first with a
     different name.  No-op if OTLP logging was not configured.
     """
+    global _process_name
+    if process_name:
+        _process_name = process_name
     if _log_provider is None:
         return
     try:
         from opentelemetry.sdk.resources import Resource
-        resource = Resource.create({"service.name": service_name})
+        attrs: dict = {"service.name": service_name}
+        if process_name:
+            attrs["helix.process.name"] = process_name
+        resource = Resource.create(attrs)
         _log_provider._resource = resource  # type: ignore[attr-defined]
     except Exception:
         pass
@@ -238,6 +250,7 @@ def _install_factory() -> None:
             record.otel_span_id        = ""
             record.helix_entity_id     = ""
             record.helix_instrument_id = ""
+        record.helix_process_name = _process_name
 
         rel = _normalize_path(record.pathname, record.filename)
         if github_repo:

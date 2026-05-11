@@ -23,6 +23,7 @@ def setup(
     insecure: bool = True,
     otlp: bool = False,
     log_endpoint: str | None = None,
+    process_name: str | None = None,
     instrument_class: Type[T] = Instrument,
 ) -> T:
     """Configure logging and return a ready-to-use Instrument.
@@ -90,5 +91,7 @@ def setup(
                 "Pass instrument_id=... to setup()."
             )
         kwargs["instrument_id"] = instrument_id
+    if "process_name" in sig.parameters and process_name is not None:
+        kwargs["process_name"] = process_name
 
     return instrument_class(**kwargs)

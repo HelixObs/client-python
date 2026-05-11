@@ -179,14 +179,18 @@ class Instrument:
         instrument_id: str,
         endpoint: str = "localhost:4317",
         insecure: bool = True,
+        process_name: str | None = None,
     ) -> None:
         self.instrument_id = instrument_id
         self._store = TraceStore()
 
-        resource = Resource.create({
+        resource_attrs = {
             "service.name": service_name,
             _ATTR_INSTRUMENT_ID: instrument_id,
-        })
+        }
+        if process_name:
+            resource_attrs["helix.process.name"] = process_name
+        resource = Resource.create(resource_attrs)
         provider = TracerProvider(resource=resource)
         provider.add_span_processor(
             BatchSpanProcessor(
@@ -198,7 +202,7 @@ class Instrument:
         self._provider = provider
 
         from .logging import update_log_service_name
-        update_log_service_name(service_name)
+        update_log_service_name(service_name, process_name=process_name)
 
     # ── Internal span factory ─────────────────────────────────────────
 
