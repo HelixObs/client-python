@@ -27,6 +27,8 @@ services:
       - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
       - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/003_trace_dedup.sql:/docker-entrypoint-initdb.d/003_trace_dedup.sql:ro
       - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/005_entity_events_trace_id.sql:/docker-entrypoint-initdb.d/005_entity_events_trace_id.sql:ro
+      - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/006_operation_duration.sql:/docker-entrypoint-initdb.d/006_operation_duration.sql:ro
+      - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/007_entity_events_error_index.sql:/docker-entrypoint-initdb.d/007_entity_events_error_index.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
