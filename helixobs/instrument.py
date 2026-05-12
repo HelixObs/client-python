@@ -182,6 +182,7 @@ class Instrument:
         process_name: str | None = None,
     ) -> None:
         self.instrument_id = instrument_id
+        self._process_name = process_name
         self._store = TraceStore()
 
         resource_attrs = {
@@ -237,6 +238,8 @@ class Instrument:
             span.set_attribute(_ATTR_PARENT_IDS, ",".join(parent_ids))
         if is_operation:
             span.set_attribute(_ATTR_IS_OPERATION, "true")
+        elif self._process_name:
+            span.set_attribute("helix.process.name", self._process_name)
 
         otel_ctx = trace.set_span_in_context(span)
         ctx_token = context_api.attach(otel_ctx)
