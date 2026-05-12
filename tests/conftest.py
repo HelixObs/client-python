@@ -29,6 +29,7 @@ def instrument(exporter: InMemorySpanExporter) -> Instrument:
     from opentelemetry.sdk.resources import Resource
 
     tel._store = TraceStore()
+    tel._process_name = None
 
     resource = Resource.create({"service.name": "test", "helix.instrument.id": "TEST"})
     provider = TracerProvider(resource=resource)

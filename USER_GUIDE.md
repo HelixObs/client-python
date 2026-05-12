@@ -193,7 +193,8 @@ Unhandled exceptions inside the `with` block automatically call `op.error()`.
 |---|---|
 | `token.start() → Token` | Start the span. Returns `self` for chaining. Called implicitly by context manager and decorator. |
 | `token.complete(metadata=None)` | End the span successfully. Optional `metadata` dict is set as span attributes. No-op after first call. |
-| `token.error(metadata=None)` | Record a `helix.error` span event, set span status to ERROR, end the span. No-op after first call. |
+| `token.error(metadata=None)` | Record a `helix.error` span event, set span status to ERROR, and **end the span**. No-op after first call. |
+| `token.add_error(metadata=None)` | Record a `helix.error` span event and set span status to ERROR **without ending the span**. Use for recoverable failures where the operation should continue. |
 | `token.add_event(name, attributes=None)` | Attach a timestamped `helix.*` event. Written to `entity_events` by the gateway. |
 | `token.set_attribute(key, value)` | Set a span attribute directly. |
 
@@ -303,6 +304,38 @@ for site in ["site-a", "site-b"]:
         if not replicate_to(site):
             log.error(f"replication to {site} timed out")
             op.error({"message": "replication_timeout", "dest": site})
+```
+
+### Recoverable failures
+
+Use `add_error()` when a sub-step fails but the operation should continue. The entity is marked as errored in HelixObs, but the span stays open so subsequent steps can still run and be recorded.
+
+```python
+with tel.operate("write-header", entity_id=event_id) as op:
+    try:
+        with tel.child_span("header_analysis.dump_header"):
+            dump_header(event)
+    except Exception as e:
+        log.error(f"dump_header failed: {e}")
+        op.add_error({"stage": "dump_header", "message": str(e)})
+        # operation continues — downstream steps still run and are recorded
+    
+    try:
+        with tel.child_span("header_analysis.write_metadata"):
+            write_metadata(event)
+    except Exception as e:
+        log.error(f"write_metadata failed: {e}")
+        op.add_error({"stage": "write_metadata", "message": str(e)})
+```
+
+Use `error()` (which ends the span) only when the failure is fatal and no further work should be recorded:
+
+```python
+with tel.operate("archival", entity_id=result_id) as op:
+    if not disk_available():
+        op.error({"message": "no_disk_space"})  # ends span immediately
+        return
+    write_archive(result_id)
 ```
 
 ### Multi-stage pipeline

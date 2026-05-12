@@ -400,3 +400,53 @@ class TestOperate:
         with pytest.raises(ValueError):
             with instrument.operate("registration", entity_id="frb-011"):
                 raise ValueError("voevent_parse_error")
+
+
+# ── Token.add_error ───────────────────────────────────────────────────────────
+
+class TestAddError:
+    def test_add_error_records_helix_error_event(self, instrument, exporter):
+        token = instrument.create("correlator", id="block-1").start()
+        token.add_error({"message": "db_timeout"})
+        token.complete()
+        span = finished_spans(exporter)[0]
+        assert any(e.name == "helix.error" for e in span.events)
+
+    def test_add_error_sets_error_status(self, instrument, exporter):
+        token = instrument.create("correlator", id="block-1").start()
+        token.add_error()
+        token.complete()
+        span = finished_spans(exporter)[0]
+        assert span.status.status_code == StatusCode.ERROR
+
+    def test_add_error_metadata_in_event_attributes(self, instrument, exporter):
+        token = instrument.create("correlator", id="block-1").start()
+        token.add_error({"stage": "dump_header", "message": "nfs_timeout"})
+        token.complete()
+        span = finished_spans(exporter)[0]
+        evt = next(e for e in span.events if e.name == "helix.error")
+        assert evt.attributes["stage"] == "dump_header"
+        assert evt.attributes["message"] == "nfs_timeout"
+
+    def test_add_error_does_not_end_span(self, instrument, exporter):
+        token = instrument.create("correlator", id="block-1").start()
+        token.add_error({"message": "recoverable"})
+        assert len(finished_spans(exporter)) == 0
+        token.complete()
+        assert len(finished_spans(exporter)) == 1
+
+    def test_add_error_multiple_times(self, instrument, exporter):
+        token = instrument.create("correlator", id="block-1").start()
+        token.add_error({"stage": "step-1"})
+        token.add_error({"stage": "step-2"})
+        token.complete()
+        span = finished_spans(exporter)[0]
+        error_events = [e for e in span.events if e.name == "helix.error"]
+        assert len(error_events) == 2
+
+    def test_add_error_on_operate_token(self, instrument, exporter):
+        with instrument.operate("write-header", entity_id="frb-001") as op:
+            op.add_error({"message": "dump_header_failed"})
+        span = finished_spans(exporter)[0]
+        assert any(e.name == "helix.error" for e in span.events)
+        assert span.status.status_code == StatusCode.ERROR

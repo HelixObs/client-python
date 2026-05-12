@@ -118,6 +118,16 @@ class Token:
     def set_attribute(self, key: str, value) -> None:
         self._span.set_attribute(key, str(value))
 
+    def add_error(self, metadata: dict | None = None) -> None:
+        """Record a helix.error event without ending the span.
+
+        Use for recoverable failures where the operation should continue.
+        The span remains open; call complete() or error() when done.
+        """
+        attrs = {k: str(v) for k, v in (metadata or {}).items()}
+        self._span.add_event("helix.error", attributes=attrs)
+        self._span.set_status(StatusCode.ERROR)
+
     def add_event(self, name: str, attributes: dict | None = None) -> None:
         self._span.add_event(name, attributes=attributes or {})
 
