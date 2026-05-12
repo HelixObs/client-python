@@ -385,6 +385,24 @@ loki.process "helix_json" {
 loki.write "default" { endpoint { url = "http://loki:3100/loki/api/v1/push" } }
 ```
 
+**Subprocess output is not captured automatically.**
+
+`os.system()` and similar calls fork a child process that writes directly to the terminal's stdout/stderr, bypassing Python's `logging` entirely. That output will not appear in Loki or carry any helix context fields.
+
+Use `subprocess.run()` with `capture_output=True` and log the result explicitly:
+
+```python
+import subprocess
+
+result = subprocess.run(cmd, capture_output=True, text=True)
+if result.stdout:
+    log.info(result.stdout.strip())
+if result.stderr:
+    log.error(result.stderr.strip())
+if result.returncode != 0:
+    log.error(f"command failed with exit code {result.returncode}: {cmd}")
+```
+
 Any collector that reads stdout and forwards to Loki works (Promtail, Fluent Bit, Vector). The contract is newline-delimited JSON with `helix_instrument_id` and `level` as top-level fields.
 
 ---
