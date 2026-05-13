@@ -258,7 +258,7 @@ def _install_factory() -> None:
         else:
             record.helix_source = f"{rel}#L{record.lineno}"
 
-        record.msg = f"{record.msg}  src={record.helix_source}"
+        record.msg = f"{record.getMessage()}  src={record.helix_source}"
         record.args = None
 
         return record
