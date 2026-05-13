@@ -35,6 +35,8 @@ Known parents (same process) become OTel span Links.  Unknown parents are
 set as helix.parent.ids; the gateway resolves them server-side.
 """
 
+from __future__ import annotations
+
 import functools
 from typing import Callable, Union
 
