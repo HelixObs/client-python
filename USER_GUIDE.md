@@ -369,9 +369,11 @@ with tel.create("aggregator", id=result_id, parents=product_ids) as token:
 
 ### Process naming convention
 
-Set `process_name` in `setup()` to identify your pipeline process in the **Pipeline Process Logs** Grafana dashboard. The value becomes the `helix_process_name` Loki stream label.
+Scientific pipelines often run as many independent processes — beam searchers, clusterers, archivers, post-processing workers — each emitting logs to the same Loki instance. Without a shared naming convention, the **Pipeline Process Logs** dashboard's process selector becomes an unstructured list of ad-hoc names that are hard to navigate and easy to accidentally duplicate across instruments or pipeline versions.
 
-Use a slash-delimited hierarchy:
+A consistent name also lets you answer operational questions without opening Grafana at all. When an on-call engineer gets paged at 3 am, they can go straight to a Loki query like `{helix_process_name=~"CHIME/l4-pipeline/.*"}` to pull logs from every L4 stage simultaneously — no hunting through a dropdown.
+
+**Convention:** use a slash-delimited hierarchy rooted at the instrument ID:
 
 ```
 {InstrumentID}/{pipeline}/{stage}
@@ -387,20 +389,18 @@ Examples:
 | CHIME L4 writer subprocess | `CHIME/l4-pipeline/writer` |
 | CHIME L4 RFI excision stage | `CHIME/l4-pipeline/rfi-excision` |
 
-The hierarchy serves two purposes:
+This gives you three things:
 
-1. **No name clashes** — the instrument ID prefix namespaces each team's processes.
-2. **Regex group filtering** — Loki's regex matcher lets you query an entire subtree. To fetch all L4 logs across every stage:
-
-```
-{helix_process_name=~"CHIME/l4-pipeline/.*"}
-```
-
-Or all CHIME logs regardless of stage:
-
-```
-{helix_process_name=~"CHIME/.*"}
-```
+1. **No name clashes across instruments** — the instrument ID prefix namespaces each team's processes so `l1-search` from CHIME and `l1-search` from a future instrument never collide in the same Loki instance.
+2. **Subtree filtering** — Loki's regex matcher lets you query an entire branch of the hierarchy at once. All L4 stages in one query:
+   ```
+   {helix_process_name=~"CHIME/l4-pipeline/.*"}
+   ```
+   All CHIME processes across every pipeline:
+   ```
+   {helix_process_name=~"CHIME/.*"}
+   ```
+3. **Legible dashboard dropdowns** — the slash separators make the process selector scannable and self-documenting without needing to read docs to understand what each process does.
 
 **Log while the span is active** to capture entity context:
 
