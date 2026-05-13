@@ -104,7 +104,7 @@ When you pass `parents=["input-abc"]`, the library checks its in-process store f
 
 ## 4. API Reference
 
-### `setup(service_name, *, instrument_id, endpoint, insecure, otlp, log_endpoint) → Instrument`
+### `setup(service_name, *, instrument_id, endpoint, insecure, otlp, log_endpoint, process_name) → Instrument`
 
 The recommended entry point. Configures logging and returns a ready-to-use `Instrument` — both stamped with the same `service_name`.
 
@@ -116,11 +116,13 @@ The recommended entry point. Configures logging and returns a ready-to-use `Inst
 | `insecure` | `bool` | `True` | Plaintext gRPC |
 | `otlp` | `bool` | `False` | Ship logs via OTLP. When `False`, JSON is written to stdout |
 | `log_endpoint` | `str \| None` | `None` | OTel Collector gRPC address for logs. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` env var, then `http://localhost:4319` |
+| `process_name` | `str \| None` | `None` | Loki stream label for the Pipeline Process Logs dashboard. See [Process naming convention](#process-naming-convention). |
 
 ```python
 from helixobs import setup
 
-tel = setup("chime.l1", instrument_id="CHIME", endpoint="gateway:4317", otlp=True)
+tel = setup("chime.l1", instrument_id="CHIME", endpoint="gateway:4317", otlp=True,
+            process_name="CHIME/l1-search")
 ```
 
 ---
@@ -364,6 +366,41 @@ with tel.create("aggregator", id=result_id, parents=product_ids) as token:
 ## 6. Structured Logging
 
 `configure_logging()` installs a JSON formatter on the root logger. Every `logging` call anywhere in the process emits a JSON object while a span is active.
+
+### Process naming convention
+
+Set `process_name` in `setup()` to identify your pipeline process in the **Pipeline Process Logs** Grafana dashboard. The value becomes the `helix_process_name` Loki stream label.
+
+Use a slash-delimited hierarchy:
+
+```
+{InstrumentID}/{pipeline}/{stage}
+```
+
+Examples:
+
+| Process | `process_name` |
+|---|---|
+| CHIME L1 beam search | `CHIME/l1-search` |
+| CHIME L2 clustering | `CHIME/l2-clustering` |
+| CHIME L4 pipeline (top level) | `CHIME/l4-pipeline` |
+| CHIME L4 writer subprocess | `CHIME/l4-pipeline/writer` |
+| CHIME L4 RFI excision stage | `CHIME/l4-pipeline/rfi-excision` |
+
+The hierarchy serves two purposes:
+
+1. **No name clashes** — the instrument ID prefix namespaces each team's processes.
+2. **Regex group filtering** — Loki's regex matcher lets you query an entire subtree. To fetch all L4 logs across every stage:
+
+```
+{helix_process_name=~"CHIME/l4-pipeline/.*"}
+```
+
+Or all CHIME logs regardless of stage:
+
+```
+{helix_process_name=~"CHIME/.*"}
+```
 
 **Log while the span is active** to capture entity context:
 
