@@ -1,5 +1,7 @@
 # helixobs — Python client
 
+[![Coverage Status](https://coveralls.io/repos/github/HelixObs/client-python/badge.svg?branch=main)](https://coveralls.io/github/HelixObs/client-python?branch=main)
+
 Entity-centric observability for scientific instrument pipelines.
 
 Track domain entities (raw observations, intermediate products, derived results) across disjoint asynchronous pipeline stages. The library attaches provenance links between entities so you can trace any scientific result back to the raw data that produced it.
