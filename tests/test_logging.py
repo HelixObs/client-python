@@ -1,7 +1,9 @@
 """Tests for helixobs.logging — log-record factory context injection."""
 
+import json
 import logging
 import os
+import sys
 
 import pytest
 
@@ -194,3 +196,129 @@ class TestUpdateLogServiceName:
 
     def test_noop_with_empty_string(self):
         helix_logging.update_log_service_name("")
+
+
+# ── install_context_fields ────────────────────────────────────────────────────
+
+class TestInstallContextFields:
+    def test_installs_factory(self):
+        helix_logging.install_context_fields()
+        assert helix_logging._installed is True
+
+    def test_idempotent(self):
+        helix_logging.install_context_fields()
+        factory1 = logging.getLogRecordFactory()
+        helix_logging.install_context_fields()
+        factory2 = logging.getLogRecordFactory()
+        assert factory1 is factory2
+
+
+# ── _HelixJsonFormatter exc_info branch ──────────────────────────────────────
+
+class TestJsonFormatterExcInfo:
+    def test_exc_info_included_in_output(self):
+        formatter = helix_logging._HelixJsonFormatter()
+        try:
+            raise ValueError("test error from formatter")
+        except ValueError:
+            exc = sys.exc_info()
+        record = logging.LogRecord(
+            name="test", level=logging.ERROR, pathname="f.py", lineno=1,
+            msg="something failed", args=(), exc_info=exc,
+        )
+        output = formatter.format(record)
+        data = json.loads(output)
+        assert "exc" in data
+        assert "ValueError" in data["exc"]
+
+
+# ── _install_json_handler else-branch (root has no handlers) ─────────────────
+
+class TestInstallJsonHandlerNoHandlers:
+    def test_adds_stream_handler_when_root_has_no_handlers(self):
+        root = logging.getLogger()
+        saved = root.handlers[:]
+        root.handlers = []
+        try:
+            helix_logging._install_json_handler()
+            assert len(root.handlers) == 1
+            assert isinstance(root.handlers[0].formatter, helix_logging._HelixJsonFormatter)
+        finally:
+            root.handlers = saved
+            helix_logging._json_handler_installed = False
+
+
+# ── update_log_service_name with process_name ─────────────────────────────────
+
+class TestUpdateLogServiceNameProcessName:
+    def test_sets_process_name_global(self, monkeypatch):
+        monkeypatch.setattr(helix_logging, "_process_name", "")
+        helix_logging.update_log_service_name("svc", process_name="beam-proc")
+        assert helix_logging._process_name == "beam-proc"
+
+    def test_process_name_unchanged_when_not_given(self, monkeypatch):
+        monkeypatch.setattr(helix_logging, "_process_name", "existing")
+        helix_logging.update_log_service_name("svc")
+        assert helix_logging._process_name == "existing"
+
+
+# ── update_log_service_name with log_provider ─────────────────────────────────
+
+class TestUpdateLogServiceNameWithProvider:
+    def test_updates_provider_resource(self, monkeypatch):
+        from unittest import mock
+        mock_provider = mock.MagicMock()
+        monkeypatch.setattr(helix_logging, "_log_provider", mock_provider)
+        helix_logging.update_log_service_name("new-service")
+        assert mock_provider._resource is not None
+
+    def test_updates_provider_resource_with_process_name(self, monkeypatch):
+        from unittest import mock
+        mock_provider = mock.MagicMock()
+        monkeypatch.setattr(helix_logging, "_log_provider", mock_provider)
+        monkeypatch.setattr(helix_logging, "_process_name", "")
+        helix_logging.update_log_service_name("new-service", process_name="p1")
+        assert helix_logging._process_name == "p1"
+        assert mock_provider._resource is not None
+
+    def test_exception_in_resource_update_is_swallowed(self, monkeypatch):
+        from unittest import mock
+        from opentelemetry.sdk.resources import Resource
+        mock_provider = mock.MagicMock()
+        monkeypatch.setattr(helix_logging, "_log_provider", mock_provider)
+        monkeypatch.setattr(Resource, "create", mock.MagicMock(side_effect=RuntimeError("boom")))
+        helix_logging.update_log_service_name("svc")  # must not raise
+
+
+# ── _install_otlp_handler ─────────────────────────────────────────────────────
+
+class TestInstallOtlpHandler:
+    def test_configure_logging_otlp_succeeds(self, monkeypatch):
+        pytest.importorskip(
+            "opentelemetry.exporter.otlp.proto.grpc._log_exporter",
+            reason="opentelemetry-exporter-otlp-proto-grpc not installed",
+        )
+        root = logging.getLogger()
+        saved = root.handlers[:]
+        try:
+            helix_logging.configure_logging(otlp=True, service_name="test-svc")
+            assert helix_logging._otlp_handler_installed is True
+            assert helix_logging._log_provider is not None
+        finally:
+            root.handlers = saved
+
+    def test_configure_logging_otlp_idempotent(self, monkeypatch):
+        pytest.importorskip(
+            "opentelemetry.exporter.otlp.proto.grpc._log_exporter",
+            reason="opentelemetry-exporter-otlp-proto-grpc not installed",
+        )
+        root = logging.getLogger()
+        saved = root.handlers[:]
+        try:
+            helix_logging.configure_logging(otlp=True, service_name="test-svc")
+            provider_first = helix_logging._log_provider
+            # second call — guard keeps the same provider
+            helix_logging.configure_logging(otlp=True, service_name="other-svc")
+            assert helix_logging._log_provider is provider_first
+        finally:
+            root.handlers = saved

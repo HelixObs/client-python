@@ -450,3 +450,123 @@ class TestAddError:
         span = finished_spans(exporter)[0]
         assert any(e.name == "helix.error" for e in span.events)
         assert span.status.status_code == StatusCode.ERROR
+
+
+# ── complete() with metadata ──────────────────────────────────────────────────
+
+class TestCompleteWithMetadata:
+    def test_metadata_sets_span_attributes(self, instrument, exporter):
+        token = instrument.create("correlator", id="block-meta").start()
+        token.complete(metadata={"snr": "18.3", "dm": "123.4"})
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("snr") == "18.3"
+        assert span.attributes.get("dm") == "123.4"
+
+    def test_metadata_values_coerced_to_str(self, instrument, exporter):
+        token = instrument.create("correlator", id="block-meta2").start()
+        token.complete(metadata={"count": 7})
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("count") == "7"
+
+    def test_no_metadata_does_not_raise(self, instrument, exporter):
+        token = instrument.create("correlator", id="block-meta3").start()
+        token.complete(metadata=None)
+        assert len(finished_spans(exporter)) == 1
+
+
+# ── helix.process.name attribute ──────────────────────────────────────────────
+
+class TestProcessNameAttribute:
+    def test_process_name_set_on_entity_span(self, instrument, exporter):
+        instrument._process_name = "beam-proc"
+        token = instrument.create("correlator", id="block-pn").start()
+        token.complete()
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("helix.process.name") == "beam-proc"
+
+    def test_process_name_not_on_operation_span(self, instrument, exporter):
+        instrument._process_name = "beam-proc"
+        with instrument.operate("hdf5-conversion", entity_id="frb-pn"):
+            pass
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("helix.entity.is_operation") == "true"
+        assert "helix.process.name" not in (span.attributes or {})
+
+
+# ── child_span ────────────────────────────────────────────────────────────────
+
+class TestChildSpan:
+    def test_child_span_with_known_parent(self, instrument, exporter):
+        token = instrument.create("clustering", id="frb-cs1").start()
+        token.complete()
+        with instrument.child_span("trigger-rpc", parent_id="frb-cs1"):
+            pass
+        names = [s.name for s in finished_spans(exporter)]
+        assert "trigger-rpc" in names
+
+    def test_child_span_with_unknown_parent(self, instrument, exporter):
+        with instrument.child_span("trigger-rpc", parent_id="unknown-entity"):
+            pass
+        assert any(s.name == "trigger-rpc" for s in finished_spans(exporter))
+
+    def test_child_span_without_parent(self, instrument, exporter):
+        with instrument.child_span("internal-step"):
+            pass
+        assert any(s.name == "internal-step" for s in finished_spans(exporter))
+
+    def test_child_span_with_attributes(self, instrument, exporter):
+        with instrument.child_span("internal-step", attributes={"key": "value"}):
+            pass
+        child = next(s for s in finished_spans(exporter) if s.name == "internal-step")
+        assert child.attributes.get("key") == "value"
+
+    def test_child_span_inherits_instrument_id(self, instrument, exporter):
+        with instrument.child_span("step"):
+            pass
+        child = next(s for s in finished_spans(exporter) if s.name == "step")
+        assert child.attributes.get("helix.instrument.id") == "TEST"
+
+    def test_child_span_inherits_entity_id_from_active_span(self, instrument, exporter):
+        token = instrument.create("clustering", id="frb-cs2").start()
+        with instrument.child_span("sub-step"):
+            pass
+        token.complete()
+        child = next(s for s in finished_spans(exporter) if s.name == "sub-step")
+        assert child.attributes.get("helix.log.entity_id") == "frb-cs2"
+
+
+# ── Instrument.shutdown ───────────────────────────────────────────────────────
+
+class TestShutdown:
+    def test_shutdown_does_not_raise(self, instrument):
+        instrument.shutdown()
+
+
+# ── Instrument.__init__ ───────────────────────────────────────────────────────
+
+class TestInstrumentInit:
+    def test_real_init_sets_instrument_id(self, monkeypatch):
+        from unittest import mock
+        import helixobs.logging as helix_logging
+        from helixobs import Instrument
+
+        monkeypatch.setattr("helixobs.instrument.trace.set_tracer_provider", mock.MagicMock())
+        monkeypatch.setattr("helixobs.instrument.OTLPSpanExporter", mock.MagicMock(return_value=mock.MagicMock()))
+        monkeypatch.setattr("helixobs.instrument.BatchSpanProcessor", mock.MagicMock(return_value=mock.MagicMock()))
+        monkeypatch.setattr(helix_logging, "_process_name", "")
+        inst = Instrument("svc", "INST-X")
+        assert inst.instrument_id == "INST-X"
+        assert inst._process_name is None
+
+    def test_real_init_with_process_name(self, monkeypatch):
+        from unittest import mock
+        import helixobs.logging as helix_logging
+        from helixobs import Instrument
+
+        monkeypatch.setattr("helixobs.instrument.trace.set_tracer_provider", mock.MagicMock())
+        monkeypatch.setattr("helixobs.instrument.OTLPSpanExporter", mock.MagicMock(return_value=mock.MagicMock()))
+        monkeypatch.setattr("helixobs.instrument.BatchSpanProcessor", mock.MagicMock(return_value=mock.MagicMock()))
+        monkeypatch.setattr(helix_logging, "_process_name", "")
+        inst = Instrument("svc", "INST-Y", process_name="beam-proc")
+        assert inst.instrument_id == "INST-Y"
+        assert inst._process_name == "beam-proc"
