@@ -24,6 +24,8 @@ def setup(
     otlp: bool = False,
     log_endpoint: str | None = None,
     process_name: str | None = None,
+    credential: str | None = None,
+    auth_endpoint: str | None = None,
     instrument_class: Type[T] = Instrument,
 ) -> T:
     """Configure logging and return a ready-to-use Instrument.
@@ -52,6 +54,15 @@ def setup(
         OTLP gRPC endpoint for log shipping. Only used when ``otlp=True``.
         Defaults to the value of ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var,
         or ``"http://localhost:4319"`` if unset.
+    credential:
+        Registration secret or existing instrument JWT. When set, the client
+        fetches a short-lived HelixObs JWT from ``auth_endpoint`` at startup
+        and attaches it to every OTLP export. Required when the gateway has
+        ``JWT_SECRET`` set. Omit for dev/local stacks without auth enforcement.
+    auth_endpoint:
+        Full URL of the gateway ``POST /auth/token`` endpoint. Required when
+        ``credential`` is set. e.g.
+        ``"https://206-12-91-148.cloud.computecanada.ca/auth/token"``
     instrument_class:
         Instrument subclass to instantiate. Use when your domain subclasses
         ``Instrument`` (e.g. ``CHIMEInstrument``). Default: ``Instrument``.
@@ -93,5 +104,9 @@ def setup(
         kwargs["instrument_id"] = instrument_id
     if "process_name" in sig.parameters and process_name is not None:
         kwargs["process_name"] = process_name
+    if "credential" in sig.parameters and credential is not None:
+        kwargs["credential"] = credential
+    if "auth_endpoint" in sig.parameters and auth_endpoint is not None:
+        kwargs["auth_endpoint"] = auth_endpoint
 
     return instrument_class(**kwargs)

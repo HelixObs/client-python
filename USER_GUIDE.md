@@ -8,12 +8,13 @@ HelixObs gives scientific instrument pipelines entity-centric observability: eve
 
 1. [Required Infrastructure](#1-required-infrastructure)
 2. [Installation](#2-installation)
-3. [Core Concepts](#3-core-concepts)
-4. [API Reference](#4-api-reference)
-5. [Integration Patterns](#5-integration-patterns)
-6. [Structured Logging](#6-structured-logging)
-7. [Data Model](#7-data-model)
-8. [Complete Example](#8-complete-example)
+3. [Authentication](#3-authentication)
+4. [Core Concepts](#4-core-concepts)
+5. [API Reference](#5-api-reference)
+6. [Integration Patterns](#6-integration-patterns)
+7. [Structured Logging](#7-structured-logging)
+8. [Data Model](#8-data-model)
+9. [Complete Example](#9-complete-example)
 
 ---
 
@@ -65,7 +66,87 @@ pip install -e .
 
 ---
 
-## 3. Core Concepts
+## 3. Authentication
+
+The HelixObs gateway can require instruments to authenticate before accepting OTLP spans. Authentication is gated by a `JWT_SECRET` environment variable on the gateway — when it is empty, auth is disabled and no client changes are needed (useful for local dev stacks).
+
+When auth is enabled, your pipeline exchanges a credential for a short-lived HelixObs JWT at startup. The library handles this automatically — no manual token management required.
+
+### How it works
+
+1. At startup, the library calls `POST /auth/token` with your credential.
+2. The gateway validates it (against frb-master for CHIME, or via a shared secret for other instruments).
+3. A 24-hour HelixObs JWT is returned and attached to every subsequent OTLP export.
+4. The library auto-refreshes the token 1 hour before it expires, so long-running pipeline processes stay authenticated without restarting.
+
+### CHIME: using your existing `CHIMEFRB_ACCESS_TOKEN`
+
+CHIME pipelines already have an LDAP-backed JWT via frb-master (`CHIMEFRB_ACCESS_TOKEN`). Pass it as the `credential` — the gateway exchanges it for a HelixObs JWT without requiring any new secret:
+
+```python
+import os
+from helixobs.chime import CHIMEInstrument
+
+tel = CHIMEInstrument(
+    service_name="chime.l1",
+    endpoint="206-12-91-148.cloud.computecanada.ca:4317",
+    credential=os.environ["CHIMEFRB_ACCESS_TOKEN"],
+    auth_endpoint="https://206-12-91-148.cloud.computecanada.ca/auth/token",
+    process_name="CHIME/l1-search",
+)
+```
+
+Or via `setup()`:
+
+```python
+from helixobs import setup
+from helixobs.chime import CHIMEInstrument
+
+tel = setup(
+    "chime.l1",
+    endpoint="206-12-91-148.cloud.computecanada.ca:4317",
+    credential=os.environ["CHIMEFRB_ACCESS_TOKEN"],
+    auth_endpoint="https://206-12-91-148.cloud.computecanada.ca/auth/token",
+    process_name="CHIME/l1-search",
+    instrument_class=CHIMEInstrument,
+    otlp=True,
+)
+```
+
+> **Token lifetime.** `CHIMEFRB_ACCESS_TOKEN` is typically short-lived. The library fetches a 24-hour HelixObs JWT at startup using whatever token is in the environment at that moment. If the CHIME token expires and the process does not restart, the HelixObs JWT remains valid for its full 24-hour window regardless. Token refresh inside `_TokenProvider` uses the HelixObs JWT's own expiry, not CHIME's.
+
+> **Startup failure.** If the gateway is unreachable or returns an error at startup, `CHIMEInstrument.__init__` raises immediately. This is intentional — it surfaces misconfigured credentials before the pipeline does any real work.
+
+### New instruments: registration secret
+
+Non-CHIME instruments authenticate with a pre-shared secret generated when the instrument is registered:
+
+```python
+import os
+from helixobs import setup
+
+tel = setup(
+    "my-instrument.pipeline",
+    instrument_id="MY_INSTRUMENT",
+    endpoint="206-12-91-148.cloud.computecanada.ca:4317",
+    credential=os.environ["MY_INSTRUMENT_SECRET"],
+    auth_endpoint="https://206-12-91-148.cloud.computecanada.ca/auth/token",
+)
+```
+
+Contact the HelixObs team to generate and register a secret for your instrument.
+
+### Auth parameters summary
+
+| Parameter | Where | Description |
+|---|---|---|
+| `credential` | `Instrument(...)` / `setup(...)` | Your credential — CHIME JWT or registration secret |
+| `auth_endpoint` | `Instrument(...)` / `setup(...)` | `https://206-12-91-148.cloud.computecanada.ca/auth/token` |
+| `insecure` | `Instrument(...)` / `setup(...)` | `True` (default, Phase 1 plaintext gRPC). Set `False` when gRPC TLS is enabled. |
+
+---
+
+## 4. Core Concepts
 
 ### Entity
 
@@ -102,9 +183,9 @@ When you pass `parents=["input-abc"]`, the library checks its in-process store f
 
 ---
 
-## 4. API Reference
+## 5. API Reference
 
-### `setup(service_name, *, instrument_id, endpoint, insecure, otlp, log_endpoint, process_name) → Instrument`
+### `setup(service_name, *, instrument_id, endpoint, insecure, otlp, log_endpoint, process_name, credential, auth_endpoint) → Instrument`
 
 The recommended entry point. Configures logging and returns a ready-to-use `Instrument` — both stamped with the same `service_name`.
 
@@ -117,6 +198,8 @@ The recommended entry point. Configures logging and returns a ready-to-use `Inst
 | `otlp` | `bool` | `False` | Ship logs via OTLP. When `False`, JSON is written to stdout |
 | `log_endpoint` | `str \| None` | `None` | OTel Collector gRPC address for logs. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` env var, then `http://localhost:4319` |
 | `process_name` | `str \| None` | `None` | Loki stream label for the Pipeline Process Logs dashboard. See [Process naming convention](#process-naming-convention). |
+| `credential` | `str \| None` | `None` | Instrument credential — CHIME JWT or registration secret. When set, `auth_endpoint` is required. See [Authentication](#3-authentication). |
+| `auth_endpoint` | `str \| None` | `None` | Full URL of the gateway `POST /auth/token` endpoint. Required when `credential` is set. |
 
 ```python
 from helixobs import setup
@@ -127,7 +210,7 @@ tel = setup("chime.l1", instrument_id="CHIME", endpoint="gateway:4317", otlp=Tru
 
 ---
 
-### `Instrument(service_name, instrument_id, endpoint, insecure)`
+### `Instrument(service_name, instrument_id, endpoint, insecure, credential, auth_endpoint)`
 
 Create one instance per process and share it across pipeline stages.
 
@@ -137,6 +220,8 @@ Create one instance per process and share it across pipeline stages.
 | `instrument_id` | `str` | — | Identifier stamped on every entity. e.g. `"MY_INSTRUMENT"` |
 | `endpoint` | `str` | `"localhost:4317"` | OTLP gRPC address of the HelixObs gateway |
 | `insecure` | `bool` | `True` | Plaintext gRPC. Set `False` if the gateway uses TLS. |
+| `credential` | `str \| None` | `None` | Instrument credential — CHIME JWT or registration secret. When set, `auth_endpoint` is required. See [Authentication](#3-authentication). |
+| `auth_endpoint` | `str \| None` | `None` | Full URL of the gateway `POST /auth/token` endpoint. Required when `credential` is set. |
 
 ---
 
@@ -267,7 +352,7 @@ Optional environment variables for GitHub source links in log lines:
 
 ---
 
-## 5. Integration Patterns
+## 6. Integration Patterns
 
 ### N-to-1 provenance
 
@@ -363,7 +448,7 @@ with tel.create("aggregator", id=result_id, parents=product_ids) as token:
 
 ---
 
-## 6. Structured Logging
+## 7. Structured Logging
 
 `configure_logging()` installs a JSON formatter on the root logger. Every `logging` call anywhere in the process emits a JSON object while a span is active.
 
@@ -477,7 +562,7 @@ Any collector that reads stdout and forwards to Loki works (Promtail, Fluent Bit
 
 ---
 
-## 7. Data Model
+## 8. Data Model
 
 ### entities
 
@@ -523,7 +608,7 @@ An entity can have any number of operation rows. Data is retained for 90 days an
 
 ---
 
-## 8. Complete Example
+## 9. Complete Example
 
 ```python
 """
