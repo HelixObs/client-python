@@ -103,6 +103,121 @@ class TestSetupLogging:
         assert helix_logging._installed is True
 
 
+class TestSetupAuthForwarding:
+    """setup() must forward credential and auth_endpoint iff the instrument_class accepts them."""
+
+    def _auth_instrument_class(self, received: dict):
+        """Returns an Instrument subclass that records kwargs and accepts auth params."""
+        class AuthInstrument(Instrument):
+            def __init__(
+                self,
+                service_name,
+                *,
+                instrument_id,
+                endpoint="localhost:4317",
+                insecure=True,
+                credential=None,
+                auth_endpoint=None,
+            ):
+                received.update(
+                    instrument_id=instrument_id,
+                    credential=credential,
+                    auth_endpoint=auth_endpoint,
+                )
+                self.instrument_id = instrument_id
+        return AuthInstrument
+
+    def test_credential_string_forwarded(self):
+        received: dict = {}
+        cls = self._auth_instrument_class(received)
+        setup(
+            "svc.test",
+            instrument_id="INST",
+            credential="my-secret",
+            auth_endpoint="https://gw/auth/token",
+            instrument_class=cls,
+        )
+        assert received["credential"] == "my-secret"
+
+    def test_credential_callable_forwarded(self):
+        received: dict = {}
+        cls = self._auth_instrument_class(received)
+        getter = lambda: "dynamic-token"
+        setup(
+            "svc.test",
+            instrument_id="INST",
+            credential=getter,
+            auth_endpoint="https://gw/auth/token",
+            instrument_class=cls,
+        )
+        assert received["credential"] is getter
+
+    def test_auth_endpoint_forwarded(self):
+        received: dict = {}
+        cls = self._auth_instrument_class(received)
+        setup(
+            "svc.test",
+            instrument_id="INST",
+            credential="secret",
+            auth_endpoint="https://gw/auth/token",
+            instrument_class=cls,
+        )
+        assert received["auth_endpoint"] == "https://gw/auth/token"
+
+    def test_credential_none_not_forwarded(self):
+        """credential=None (the default) must not be passed to the constructor."""
+        received: dict = {}
+        cls = self._auth_instrument_class(received)
+        setup("svc.test", instrument_id="INST", instrument_class=cls)
+        # credential defaults to None and is not explicitly forwarded
+        assert received.get("credential") is None
+
+    def test_credential_not_forwarded_to_subclass_without_param(self):
+        """credential must not be forwarded to constructors that don't accept it."""
+        received: dict = {}
+
+        class NoAuthInstrument(Instrument):
+            def __init__(self, service_name, *, instrument_id, endpoint, insecure):
+                received["kwargs"] = dict(
+                    instrument_id=instrument_id, endpoint=endpoint, insecure=insecure
+                )
+                self.instrument_id = instrument_id
+
+        setup(
+            "svc.test",
+            instrument_id="INST",
+            credential="secret",
+            auth_endpoint="https://gw/auth/token",
+            instrument_class=NoAuthInstrument,
+        )
+        assert "credential" not in received["kwargs"]
+        assert "auth_endpoint" not in received["kwargs"]
+
+    def test_process_name_forwarded_when_in_signature(self):
+        received: dict = {}
+
+        class ProcInstrument(Instrument):
+            def __init__(
+                self,
+                service_name,
+                *,
+                instrument_id,
+                endpoint,
+                insecure,
+                process_name=None,
+            ):
+                received["process_name"] = process_name
+                self.instrument_id = instrument_id
+
+        setup(
+            "svc.test",
+            instrument_id="INST",
+            process_name="node-07",
+            instrument_class=ProcInstrument,
+        )
+        assert received["process_name"] == "node-07"
+
+
 class TestSetupLogEndpoint:
     def test_log_endpoint_sets_env_var(self, patched_instrument, monkeypatch):
         monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
