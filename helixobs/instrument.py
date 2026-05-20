@@ -38,8 +38,13 @@ set as helix.parent.ids; the gateway resolves them server-side.
 from __future__ import annotations
 
 import functools
+import json
+import threading
+import time
+import urllib.request
 from typing import Callable, Union
 
+import grpc
 from opentelemetry import context as context_api
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -49,6 +54,63 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Link, NonRecordingSpan, StatusCode
 
 from ._store import TraceStore
+
+
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+
+class _TokenProvider:
+    """Fetches and caches a HelixObs JWT from the gateway auth endpoint.
+
+    Thread-safe. Refreshes the token proactively 1h before expiry so
+    long-running pipeline processes always have a valid credential.
+    """
+
+    def __init__(self, auth_endpoint: str, instrument_id: str, credential: str) -> None:
+        self._auth_endpoint = auth_endpoint
+        self._instrument_id = instrument_id
+        self._credential = credential
+        self._token: str = ""
+        self._expires_at: float = 0.0
+        self._lock = threading.Lock()
+        self._refresh()  # fail-fast: raises immediately if gateway is unreachable
+
+    def token(self) -> str:
+        """Return a valid JWT, refreshing if within 1h of expiry."""
+        if time.monotonic() >= self._expires_at - 3600:
+            with self._lock:
+                if time.monotonic() >= self._expires_at - 3600:
+                    self._refresh()
+        return self._token
+
+    def _refresh(self) -> None:
+        payload = json.dumps({
+            "instrument_id": self._instrument_id,
+            "credential": self._credential,
+        }).encode()
+        req = urllib.request.Request(
+            self._auth_endpoint,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        self._token = data["token"]
+        self._expires_at = time.monotonic() + data["expires_in"]
+
+
+class _TokenPlugin(grpc.AuthMetadataPlugin):
+    """Injects the HelixObs Bearer token into every gRPC call.
+
+    Used for TLS channels (Phase 2). Called per-RPC by the gRPC runtime,
+    enabling seamless token refresh without recreating the channel.
+    """
+
+    def __init__(self, provider: _TokenProvider) -> None:
+        self._provider = provider
+
+    def __call__(self, context, callback):  # type: ignore[override]
+        callback([("authorization", f"Bearer {self._provider.token()}")], None)
 
 _ATTR_ENTITY_ID     = "helix.entity.id"
 _ATTR_INSTRUMENT_ID = "helix.instrument.id"
@@ -191,8 +253,33 @@ class Instrument:
         instrument_id: str,
         endpoint: str = "localhost:4317",
         insecure: bool = True,
+        credential: str | None = None,
+        auth_endpoint: str | None = None,
         process_name: str | None = None,
     ) -> None:
+        """
+        Parameters
+        ----------
+        service_name:
+            OTel service name — identifies this pipeline in Tempo/Grafana.
+        instrument_id:
+            Instrument identifier stamped on every entity span.
+        endpoint:
+            OTLP gRPC endpoint of the HelixObs gateway (host:port).
+        insecure:
+            Use plaintext gRPC (True = Phase 1). Set False when the gateway
+            is TLS-terminated (Phase 2 / Caddy in front of gRPC port).
+        credential:
+            Registration secret or existing instrument JWT. When set, the
+            client exchanges it for a short-lived HelixObs JWT via auth_endpoint
+            and attaches it to every OTLP export.
+        auth_endpoint:
+            Full URL of the gateway POST /auth/token endpoint, e.g.
+            "https://206-12-91-148.cloud.computecanada.ca/auth/token".
+            Required when credential is set.
+        process_name:
+            Optional sub-process label (e.g. "l1-node-07").
+        """
         self.instrument_id = instrument_id
         self._process_name = process_name
         self._store = TraceStore()
@@ -204,18 +291,49 @@ class Instrument:
         if process_name:
             resource_attrs["helix.process.name"] = process_name
         resource = Resource.create(resource_attrs)
-        provider = TracerProvider(resource=resource)
-        provider.add_span_processor(
-            BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=endpoint, insecure=insecure)
-            )
-        )
-        trace.set_tracer_provider(provider)
-        self._tracer = trace.get_tracer("helixobs", tracer_provider=provider)
-        self._provider = provider
+
+        exporter = self._build_exporter(endpoint, insecure, credential, auth_endpoint, instrument_id)
+
+        tracer_provider = TracerProvider(resource=resource)
+        tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(tracer_provider)
+        self._tracer = trace.get_tracer("helixobs", tracer_provider=tracer_provider)
+        self._provider = tracer_provider
 
         from .logging import update_log_service_name
         update_log_service_name(service_name, process_name=process_name)
+
+    @staticmethod
+    def _build_exporter(
+        endpoint: str,
+        insecure: bool,
+        credential: str | None,
+        auth_endpoint: str | None,
+        instrument_id: str,
+    ) -> OTLPSpanExporter:
+        if not credential:
+            return OTLPSpanExporter(endpoint=endpoint, insecure=insecure)
+
+        if not auth_endpoint:
+            raise ValueError("auth_endpoint is required when credential is set")
+
+        token_provider = _TokenProvider(auth_endpoint, instrument_id, credential)
+
+        if insecure:
+            # Phase 1: plaintext gRPC. Token embedded as a static header.
+            # Valid for 24h; restart the process to pick up a fresh token after expiry.
+            return OTLPSpanExporter(
+                endpoint=endpoint,
+                insecure=True,
+                headers=[("authorization", f"Bearer {token_provider.token()}")],
+            )
+        else:
+            # Phase 2: TLS gRPC. AuthMetadataPlugin refreshes the token per-RPC.
+            channel_creds = grpc.composite_channel_credentials(
+                grpc.ssl_channel_credentials(),
+                grpc.metadata_call_credentials(_TokenPlugin(token_provider)),
+            )
+            return OTLPSpanExporter(endpoint=endpoint, credentials=channel_creds)
 
     # ── Internal span factory ─────────────────────────────────────────
 
