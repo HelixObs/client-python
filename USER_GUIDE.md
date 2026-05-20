@@ -79,18 +79,27 @@ When auth is enabled, your pipeline exchanges a credential for a short-lived Hel
 3. A 24-hour HelixObs JWT is returned and attached to every subsequent OTLP export.
 4. The library auto-refreshes the token 1 hour before it expires, so long-running pipeline processes stay authenticated without restarting.
 
-### CHIME: using your existing `CHIMEFRB_ACCESS_TOKEN`
+### CHIME: using your existing frb-master credentials
 
-CHIME pipelines already have an LDAP-backed JWT via frb-master (`CHIMEFRB_ACCESS_TOKEN`). Pass it as the `credential` — the gateway exchanges it for a HelixObs JWT without requiring any new secret:
+CHIME pipelines authenticate via frb-master. The gateway validates credentials by calling frb-master's `/auth/verify` endpoint. Because the frb-master access token expires in ~30 minutes, pass a **callable** rather than a static string — the library calls it fresh each time it needs to refresh the 24-hour HelixObs JWT:
 
 ```python
-import os
+from chime_frb_api.core import CHIMEFRB
 from helixobs.chime import CHIMEInstrument
+
+# Create the frb-api client once — it manages its own token refresh internally.
+frb = CHIMEFRB()
+frb.authorize()
+
+def get_chime_token() -> str:
+    """Return a valid frb-master access token, refreshing if needed."""
+    frb._check_authorization()
+    return frb.access_token
 
 tel = CHIMEInstrument(
     service_name="chime.l1",
     endpoint="206-12-91-148.cloud.computecanada.ca:4317",
-    credential=os.environ["CHIMEFRB_ACCESS_TOKEN"],
+    credential=get_chime_token,          # callable — invoked on each HelixObs JWT refresh
     auth_endpoint="https://206-12-91-148.cloud.computecanada.ca/auth/token",
     process_name="CHIME/l1-search",
 )
@@ -105,7 +114,7 @@ from helixobs.chime import CHIMEInstrument
 tel = setup(
     "chime.l1",
     endpoint="206-12-91-148.cloud.computecanada.ca:4317",
-    credential=os.environ["CHIMEFRB_ACCESS_TOKEN"],
+    credential=get_chime_token,
     auth_endpoint="https://206-12-91-148.cloud.computecanada.ca/auth/token",
     process_name="CHIME/l1-search",
     instrument_class=CHIMEInstrument,
@@ -113,9 +122,9 @@ tel = setup(
 )
 ```
 
-> **Token lifetime.** `CHIMEFRB_ACCESS_TOKEN` is typically short-lived. The library fetches a 24-hour HelixObs JWT at startup using whatever token is in the environment at that moment. If the CHIME token expires and the process does not restart, the HelixObs JWT remains valid for its full 24-hour window regardless. Token refresh inside `_TokenProvider` uses the HelixObs JWT's own expiry, not CHIME's.
+> **Why a callable?** The HelixObs JWT lasts 24 hours and is refreshed 1 hour before expiry. When the library calls `/auth/token` again at hour 23, it invokes `get_chime_token()` to get a fresh frb-master access token first. `frb._check_authorization()` uses the long-lived refresh token internally to renew the access token if needed. Passing a static string instead only works for processes that restart within the frb-master access token's ~30 minute window.
 
-> **Startup failure.** If the gateway is unreachable or returns an error at startup, `CHIMEInstrument.__init__` raises immediately. This is intentional — it surfaces misconfigured credentials before the pipeline does any real work.
+> **Startup failure.** If the gateway is unreachable or frb-master rejects the credential at startup, `CHIMEInstrument.__init__` raises immediately. This is intentional — it surfaces misconfigured credentials before the pipeline does any real work.
 
 ### New instruments: registration secret
 
@@ -140,7 +149,7 @@ Contact the HelixObs team to generate and register a secret for your instrument.
 
 | Parameter | Where | Description |
 |---|---|---|
-| `credential` | `Instrument(...)` / `setup(...)` | Your credential — CHIME JWT or registration secret |
+| `credential` | `Instrument(...)` / `setup(...)` | A `str` or a `Callable[[], str]`. Pass a callable when the underlying credential expires (e.g. CHIME access tokens). Pass a static string for long-lived registration secrets. |
 | `auth_endpoint` | `Instrument(...)` / `setup(...)` | `https://206-12-91-148.cloud.computecanada.ca/auth/token` |
 | `insecure` | `Instrument(...)` / `setup(...)` | `True` (default, Phase 1 plaintext gRPC). Set `False` when gRPC TLS is enabled. |
 
@@ -198,7 +207,7 @@ The recommended entry point. Configures logging and returns a ready-to-use `Inst
 | `otlp` | `bool` | `False` | Ship logs via OTLP. When `False`, JSON is written to stdout |
 | `log_endpoint` | `str \| None` | `None` | OTel Collector gRPC address for logs. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` env var, then `http://localhost:4319` |
 | `process_name` | `str \| None` | `None` | Loki stream label for the Pipeline Process Logs dashboard. See [Process naming convention](#process-naming-convention). |
-| `credential` | `str \| None` | `None` | Instrument credential — CHIME JWT or registration secret. When set, `auth_endpoint` is required. See [Authentication](#3-authentication). |
+| `credential` | `str \| Callable \| None` | `None` | Instrument credential. Pass a `Callable[[], str]` when the underlying credential expires (CHIME). Pass a static `str` for long-lived secrets. When set, `auth_endpoint` is required. See [Authentication](#3-authentication). |
 | `auth_endpoint` | `str \| None` | `None` | Full URL of the gateway `POST /auth/token` endpoint. Required when `credential` is set. |
 
 ```python
@@ -220,7 +229,7 @@ Create one instance per process and share it across pipeline stages.
 | `instrument_id` | `str` | — | Identifier stamped on every entity. e.g. `"MY_INSTRUMENT"` |
 | `endpoint` | `str` | `"localhost:4317"` | OTLP gRPC address of the HelixObs gateway |
 | `insecure` | `bool` | `True` | Plaintext gRPC. Set `False` if the gateway uses TLS. |
-| `credential` | `str \| None` | `None` | Instrument credential — CHIME JWT or registration secret. When set, `auth_endpoint` is required. See [Authentication](#3-authentication). |
+| `credential` | `str \| Callable \| None` | `None` | Instrument credential. Pass a `Callable[[], str]` when the underlying credential expires (CHIME). Pass a static `str` for long-lived secrets. When set, `auth_endpoint` is required. |
 | `auth_endpoint` | `str \| None` | `None` | Full URL of the gateway `POST /auth/token` endpoint. Required when `credential` is set. |
 
 ---

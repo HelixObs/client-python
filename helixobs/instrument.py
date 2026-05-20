@@ -65,7 +65,7 @@ class _TokenProvider:
     long-running pipeline processes always have a valid credential.
     """
 
-    def __init__(self, auth_endpoint: str, instrument_id: str, credential: str) -> None:
+    def __init__(self, auth_endpoint: str, instrument_id: str, credential: Union[str, Callable[[], str]]) -> None:
         self._auth_endpoint = auth_endpoint
         self._instrument_id = instrument_id
         self._credential = credential
@@ -83,9 +83,10 @@ class _TokenProvider:
         return self._token
 
     def _refresh(self) -> None:
+        credential = self._credential() if callable(self._credential) else self._credential
         payload = json.dumps({
             "instrument_id": self._instrument_id,
-            "credential": self._credential,
+            "credential": credential,
         }).encode()
         req = urllib.request.Request(
             self._auth_endpoint,
@@ -253,7 +254,7 @@ class Instrument:
         instrument_id: str,
         endpoint: str = "localhost:4317",
         insecure: bool = True,
-        credential: str | None = None,
+        credential: Union[str, Callable[[], str], None] = None,
         auth_endpoint: str | None = None,
         process_name: str | None = None,
     ) -> None:
@@ -307,7 +308,7 @@ class Instrument:
     def _build_exporter(
         endpoint: str,
         insecure: bool,
-        credential: str | None,
+        credential: Union[str, Callable[[], str], None],
         auth_endpoint: str | None,
         instrument_id: str,
     ) -> OTLPSpanExporter:

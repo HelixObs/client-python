@@ -7,7 +7,7 @@ Convenience entry point that wires traces and logs in one call.
 from __future__ import annotations
 
 import inspect
-from typing import Type, TypeVar
+from typing import Callable, Type, TypeVar, Union
 
 from .instrument import Instrument
 from .logging import configure_logging
@@ -24,7 +24,7 @@ def setup(
     otlp: bool = False,
     log_endpoint: str | None = None,
     process_name: str | None = None,
-    credential: str | None = None,
+    credential: Union[str, Callable[[], str], None] = None,
     auth_endpoint: str | None = None,
     instrument_class: Type[T] = Instrument,
 ) -> T:
