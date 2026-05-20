@@ -1,6 +1,7 @@
 # helixobs — Python client
 
 [![Coverage Status](https://coveralls.io/repos/github/HelixObs/client-python/badge.svg?branch=main)](https://coveralls.io/github/HelixObs/client-python?branch=main)
+[![Documentation](https://img.shields.io/badge/docs-helixobs.github.io-blue)](https://helixobs.github.io)
 
 Entity-centric observability for scientific instrument pipelines.
 
