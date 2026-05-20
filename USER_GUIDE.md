@@ -75,60 +75,13 @@ When auth is enabled, your pipeline exchanges a credential for a short-lived Hel
 ### How it works
 
 1. At startup, the library calls `POST /auth/token` with your credential.
-2. The gateway validates it (against frb-master for CHIME, or via a shared secret for other instruments).
+2. The gateway validates it against the instrument's configured auth backend (token introspection or pre-shared secret).
 3. A 24-hour HelixObs JWT is returned and attached to every subsequent OTLP export.
 4. The library auto-refreshes the token 1 hour before it expires, so long-running pipeline processes stay authenticated without restarting.
 
-### CHIME: using your existing frb-master credentials
+### Static credential (long-lived secret)
 
-CHIME pipelines authenticate via frb-master. The gateway validates credentials by calling frb-master's `/auth/verify` endpoint. Because the frb-master access token expires in ~30 minutes, pass a **callable** rather than a static string — the library calls it fresh each time it needs to refresh the 24-hour HelixObs JWT:
-
-```python
-from chime_frb_api.core import CHIMEFRB
-from helixobs.chime import CHIMEInstrument
-
-# Create the frb-api client once — it manages its own token refresh internally.
-frb = CHIMEFRB()
-frb.authorize()
-
-def get_chime_token() -> str:
-    """Return a valid frb-master access token, refreshing if needed."""
-    frb._check_authorization()
-    return frb.access_token
-
-tel = CHIMEInstrument(
-    service_name="chime.l1",
-    endpoint="206-12-91-148.cloud.computecanada.ca:4317",
-    credential=get_chime_token,          # callable — invoked on each HelixObs JWT refresh
-    auth_endpoint="https://206-12-91-148.cloud.computecanada.ca/auth/token",
-    process_name="CHIME/l1-search",
-)
-```
-
-Or via `setup()`:
-
-```python
-from helixobs import setup
-from helixobs.chime import CHIMEInstrument
-
-tel = setup(
-    "chime.l1",
-    endpoint="206-12-91-148.cloud.computecanada.ca:4317",
-    credential=get_chime_token,
-    auth_endpoint="https://206-12-91-148.cloud.computecanada.ca/auth/token",
-    process_name="CHIME/l1-search",
-    instrument_class=CHIMEInstrument,
-    otlp=True,
-)
-```
-
-> **Why a callable?** The HelixObs JWT lasts 24 hours and is refreshed 1 hour before expiry. When the library calls `/auth/token` again at hour 23, it invokes `get_chime_token()` to get a fresh frb-master access token first. `frb._check_authorization()` uses the long-lived refresh token internally to renew the access token if needed. Passing a static string instead only works for processes that restart within the frb-master access token's ~30 minute window.
-
-> **Startup failure.** If the gateway is unreachable or frb-master rejects the credential at startup, `CHIMEInstrument.__init__` raises immediately. This is intentional — it surfaces misconfigured credentials before the pipeline does any real work.
-
-### New instruments: registration secret
-
-Non-CHIME instruments authenticate with a pre-shared secret generated when the instrument is registered:
+When your instrument authenticates with a pre-shared registration secret, pass it as a string:
 
 ```python
 import os
@@ -137,21 +90,44 @@ from helixobs import setup
 tel = setup(
     "my-instrument.pipeline",
     instrument_id="MY_INSTRUMENT",
-    endpoint="206-12-91-148.cloud.computecanada.ca:4317",
+    endpoint="gateway:4317",
     credential=os.environ["MY_INSTRUMENT_SECRET"],
-    auth_endpoint="https://206-12-91-148.cloud.computecanada.ca/auth/token",
+    auth_endpoint="https://helixobs.example.org/auth/token",
 )
 ```
 
-Contact the HelixObs team to generate and register a secret for your instrument.
+### Callable credential (short-lived token)
+
+If your instrument's existing auth system issues short-lived tokens (e.g. access tokens that expire in minutes), pass a **callable** instead of a string. The library calls it fresh on every `/auth/token` request — including the automatic refresh at hour 23 — so it always presents a valid token regardless of the underlying expiry:
+
+```python
+import os
+from helixobs import setup
+
+def get_credential() -> str:
+    """Return a valid credential, refreshing from your auth system if needed."""
+    # Your instrument's token refresh logic here.
+    # Called at startup and again ~1h before the 24h HelixObs JWT expires.
+    return your_auth_client.get_valid_token()
+
+tel = setup(
+    "my-instrument.pipeline",
+    instrument_id="MY_INSTRUMENT",
+    endpoint="gateway:4317",
+    credential=get_credential,           # callable — not a string
+    auth_endpoint="https://helixobs.example.org/auth/token",
+)
+```
+
+> **Startup failure.** If the gateway is unreachable or the credential is rejected at startup, `Instrument.__init__` raises immediately — before the pipeline does any real work.
 
 ### Auth parameters summary
 
 | Parameter | Where | Description |
 |---|---|---|
-| `credential` | `Instrument(...)` / `setup(...)` | A `str` or a `Callable[[], str]`. Pass a callable when the underlying credential expires (e.g. CHIME access tokens). Pass a static string for long-lived registration secrets. |
-| `auth_endpoint` | `Instrument(...)` / `setup(...)` | `https://206-12-91-148.cloud.computecanada.ca/auth/token` |
-| `insecure` | `Instrument(...)` / `setup(...)` | `True` (default, Phase 1 plaintext gRPC). Set `False` when gRPC TLS is enabled. |
+| `credential` | `Instrument(...)` / `setup(...)` | A `str` (static secret) or `Callable[[], str]` (refreshed on each use). Required when auth is enforced. |
+| `auth_endpoint` | `Instrument(...)` / `setup(...)` | Full URL of the gateway `POST /auth/token` endpoint. Required when `credential` is set. |
+| `insecure` | `Instrument(...)` / `setup(...)` | `True` (default, plaintext gRPC). Set `False` when the gateway uses TLS. |
 
 ---
 
