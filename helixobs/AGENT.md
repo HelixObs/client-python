@@ -9,7 +9,7 @@ Core library code. Entry point is `Instrument` in `instrument.py`.
 - **logging.py** — `configure_logging(*, otlp=False)`: installs a log-record factory that injects `otelTraceID`, `otelSpanID`, `helixEntityID`, `helixInstrumentID` into every log record while a span is active. Default mode writes JSON to stdout (sidecar collection). `otlp=True` ships logs via `OTLPLogExporter` over gRPC to the OTel Collector — no sidecar required.
 - **chime/** — `CHIMEInstrument` subclass + CHIME semantic convention attribute constants.
 
-## Attribute contract with the gateway
+## Attribute contract with the herald
 
 The gateway extracts these attributes from every incoming span:
 
@@ -20,7 +20,7 @@ helix.parent.ids         string   comma-separated unresolved parent IDs (optiona
 helix.entity.is_operation string  "true" → write entity_operations row, not entities row
 ```
 
-Do not rename these without updating the gateway interceptor constants (`attrEntityID`, etc.).
+Do not rename these without updating the herald interceptor constants (`attrEntityID`, etc.).
 
 ## Entity vs Operation
 

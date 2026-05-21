@@ -25,7 +25,7 @@ Your pipeline process connects to a single endpoint. The full HelixObs stack run
 | Requirement | Details |
 |---|---|
 | **HelixObs Gateway** | gRPC endpoint (default `localhost:4317`). Every `create()`/`operate()` call sends an OTLP span here. |
-| **OTel Collector** | gRPC endpoint (default `localhost:4319`). Required for OTLP log shipping — the gateway handles traces only. |
+| **OTel Collector** | gRPC endpoint (default `localhost:4319`). Required for OTLP log shipping — the herald handles traces only. |
 | **Log delivery** | Sidecar mode (default) or OTLP mode — see [Structured Logging](#6-structured-logging). |
 
 > In both modes your pipeline makes no HTTP calls and no direct database calls. All telemetry flows through gRPC.
@@ -68,7 +68,7 @@ pip install -e .
 
 ## 3. Authentication
 
-The HelixObs gateway can require instruments to authenticate before accepting OTLP spans. Authentication is gated by a `JWT_SECRET` environment variable on the gateway — when it is empty, auth is disabled and no client changes are needed (useful for local dev stacks).
+The HelixObs herald can require instruments to authenticate before accepting OTLP spans. Authentication is gated by a `JWT_SECRET` environment variable on the herald — when it is empty, auth is disabled and no client changes are needed (useful for local dev stacks).
 
 When auth is enabled, your pipeline exchanges a credential for a short-lived HelixObs JWT at startup. The library handles this automatically — no manual token management required.
 
@@ -90,7 +90,7 @@ from helixobs import setup
 tel = setup(
     "my-instrument.pipeline",
     instrument_id="MY_INSTRUMENT",
-    endpoint="gateway:4317",
+    endpoint="herald:4317",
     credential=os.environ["MY_INSTRUMENT_SECRET"],
     auth_endpoint="https://helixobs.example.org/auth/token",
 )
@@ -113,21 +113,21 @@ def get_credential() -> str:
 tel = setup(
     "my-instrument.pipeline",
     instrument_id="MY_INSTRUMENT",
-    endpoint="gateway:4317",
+    endpoint="herald:4317",
     credential=get_credential,           # callable — not a string
     auth_endpoint="https://helixobs.example.org/auth/token",
 )
 ```
 
-> **Startup failure.** If the gateway is unreachable or the credential is rejected at startup, `Instrument.__init__` raises immediately — before the pipeline does any real work.
+> **Startup failure.** If the herald is unreachable or the credential is rejected at startup, `Instrument.__init__` raises immediately — before the pipeline does any real work.
 
 ### Auth parameters summary
 
 | Parameter | Where | Description |
 |---|---|---|
 | `credential` | `Instrument(...)` / `setup(...)` | A `str` (static secret) or `Callable[[], str]` (refreshed on each use). Required when auth is enforced. |
-| `auth_endpoint` | `Instrument(...)` / `setup(...)` | Full URL of the gateway `POST /auth/token` endpoint. Required when `credential` is set. |
-| `insecure` | `Instrument(...)` / `setup(...)` | `True` (default, plaintext gRPC). Set `False` when the gateway uses TLS. |
+| `auth_endpoint` | `Instrument(...)` / `setup(...)` | Full URL of the herald `POST /auth/token` endpoint. Required when `credential` is set. |
+| `insecure` | `Instrument(...)` / `setup(...)` | `True` (default, plaintext gRPC). Set `False` when the herald uses TLS. |
 
 ---
 
@@ -150,7 +150,7 @@ An entity is any discrete data product your pipeline produces or consumes: a raw
 
 Some work happens on an entity *after* its creation trace has ended — often asynchronously in a separate process. These are not new entities; they are **operations on an existing entity**, each with their own independent OTel trace. Use `tel.operate()` for these cases.
 
-If the entity does not yet exist when an operation arrives (race condition or late arrival), the gateway creates a minimal placeholder automatically.
+If the entity does not yet exist when an operation arrives (race condition or late arrival), the herald creates a minimal placeholder automatically.
 
 ### Token
 
@@ -164,7 +164,7 @@ Both `tel.create()` and `tel.operate()` return a `Token`. It is usable three way
 
 ### Parent resolution
 
-When you pass `parents=["input-abc"]`, the library checks its in-process store first. If the parent was created in the same process, it becomes an OTel span `Link`. If it was created in a different process, its ID is set as the `helix.parent.ids` attribute and the gateway resolves the edge server-side.
+When you pass `parents=["input-abc"]`, the library checks its in-process store first. If the parent was created in the same process, it becomes an OTel span `Link`. If it was created in a different process, its ID is set as the `helix.parent.ids` attribute and the herald resolves the edge server-side.
 
 ---
 
@@ -184,12 +184,12 @@ The recommended entry point. Configures logging and returns a ready-to-use `Inst
 | `log_endpoint` | `str \| None` | `None` | OTel Collector gRPC address for logs. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` env var, then `http://localhost:4319` |
 | `process_name` | `str \| None` | `None` | Loki stream label for the Pipeline Process Logs dashboard. See [Process naming convention](#process-naming-convention). |
 | `credential` | `str \| Callable \| None` | `None` | Instrument credential. Pass a `Callable[[], str]` when the underlying credential expires (CHIME). Pass a static `str` for long-lived secrets. When set, `auth_endpoint` is required. See [Authentication](#3-authentication). |
-| `auth_endpoint` | `str \| None` | `None` | Full URL of the gateway `POST /auth/token` endpoint. Required when `credential` is set. |
+| `auth_endpoint` | `str \| None` | `None` | Full URL of the herald `POST /auth/token` endpoint. Required when `credential` is set. |
 
 ```python
 from helixobs import setup
 
-tel = setup("chime.l1", instrument_id="CHIME", endpoint="gateway:4317", otlp=True,
+tel = setup("chime.l1", instrument_id="CHIME", endpoint="herald:4317", otlp=True,
             process_name="CHIME/l1-search")
 ```
 
@@ -203,10 +203,10 @@ Create one instance per process and share it across pipeline stages.
 |---|---|---|---|
 | `service_name` | `str` | — | OTel service name, shown in Tempo. e.g. `"my-instrument.pipeline"` |
 | `instrument_id` | `str` | — | Identifier stamped on every entity. e.g. `"MY_INSTRUMENT"` |
-| `endpoint` | `str` | `"localhost:4317"` | OTLP gRPC address of the HelixObs gateway |
-| `insecure` | `bool` | `True` | Plaintext gRPC. Set `False` if the gateway uses TLS. |
+| `endpoint` | `str` | `"localhost:4317"` | OTLP gRPC address of the HelixObs herald |
+| `insecure` | `bool` | `True` | Plaintext gRPC. Set `False` if the herald uses TLS. |
 | `credential` | `str \| Callable \| None` | `None` | Instrument credential. Pass a `Callable[[], str]` when the underlying credential expires (CHIME). Pass a static `str` for long-lived secrets. When set, `auth_endpoint` is required. |
-| `auth_endpoint` | `str \| None` | `None` | Full URL of the gateway `POST /auth/token` endpoint. Required when `credential` is set. |
+| `auth_endpoint` | `str \| None` | `None` | Full URL of the herald `POST /auth/token` endpoint. Required when `credential` is set. |
 
 ---
 
@@ -267,7 +267,7 @@ Unhandled exceptions inside the `with` block automatically call `op.error()`.
 | `token.complete(metadata=None)` | End the span successfully. Optional `metadata` dict is set as span attributes. No-op after first call. |
 | `token.error(metadata=None)` | Record a `helix.error` span event, set span status to ERROR, and **end the span**. No-op after first call. |
 | `token.add_error(metadata=None)` | Record a `helix.error` span event and set span status to ERROR **without ending the span**. Use for recoverable failures where the operation should continue. |
-| `token.add_event(name, attributes=None)` | Attach a timestamped `helix.*` event. Written to `entity_events` by the gateway. |
+| `token.add_event(name, attributes=None)` | Attach a timestamped `helix.*` event. Written to `entity_events` by the herald. |
 | `token.set_attribute(key, value)` | Set a span attribute directly. |
 
 ---
@@ -629,7 +629,7 @@ An entity can have any number of operation rows. Data is retained for 90 days an
 my_pipeline.py — HelixObs integration example.
 
 Environment:
-    GATEWAY_ENDPOINT             gRPC address of the HelixObs gateway (default: localhost:4317)
+    GATEWAY_ENDPOINT             gRPC address of the HelixObs herald (default: localhost:4317)
     OTEL_EXPORTER_OTLP_ENDPOINT  gRPC address of the OTel Collector for log shipping
                                  (default: http://localhost:4319)
 """

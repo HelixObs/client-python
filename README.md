@@ -7,7 +7,7 @@ Entity-centric observability for scientific instrument pipelines.
 
 Track domain entities (raw observations, intermediate products, derived results) across disjoint asynchronous pipeline stages. The library attaches provenance links between entities so you can trace any scientific result back to the raw data that produced it.
 
-Built on [OpenTelemetry](https://opentelemetry.io/). Signals are standard OTLP — the HelixObs gateway adds entity intelligence on top.
+Built on [OpenTelemetry](https://opentelemetry.io/). Signals are standard OTLP — the HelixObs herald adds entity intelligence on top.
 
 ## Installation
 
@@ -29,7 +29,7 @@ log = logging.getLogger("my.pipeline")
 tel = setup(
     "my-instrument.pipeline",
     instrument_id="MY_INSTRUMENT",
-    endpoint="gateway:4317",
+    endpoint="herald:4317",
     otlp=True,               # ship logs via OTLP to the collector (port 4319)
 )
 

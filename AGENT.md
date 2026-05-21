@@ -4,7 +4,7 @@ Python client library for HelixObs — entity-centric observability for scientif
 
 ## What this is
 
-A thin OTel wrapper that lets pipeline engineers track domain entities (data blocks, candidates, events) across disjoint async pipeline stages. Entities are correlated via a DAG of `parent_ids`, which the gateway resolves into OTel span links server-side.
+A thin OTel wrapper that lets pipeline engineers track domain entities (data blocks, candidates, events) across disjoint async pipeline stages. Entities are correlated via a DAG of `parent_ids`, which the herald resolves into OTel span links server-side.
 
 The library **never blocks the pipeline** — all OTLP exports happen in the OTel SDK's `BatchSpanProcessor` background thread.
 
@@ -47,7 +47,7 @@ tests/
 
 ## Gateway event contract
 
-Any span event whose name starts with `helix.` is extracted by the gateway and written to the `entity_events` TimescaleDB table. This applies to both entity creation spans and operation spans.
+Any span event whose name starts with `helix.` is extracted by the herald and written to the `entity_events` TimescaleDB table. This applies to both entity creation spans and operation spans.
 
 - `helix.error` — entity or operation failed (set by `token.error()`)
 - `helix.event.<name>` — scientifically notable signal (set by `token.add_event()`)
