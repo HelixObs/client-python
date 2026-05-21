@@ -24,24 +24,24 @@ Your pipeline process connects to a single endpoint. The full HelixObs stack run
 
 | Requirement | Details |
 |---|---|
-| **HelixObs Gateway** | gRPC endpoint (default `localhost:4317`). Every `create()`/`operate()` call sends an OTLP span here. |
+| **HelixObs Herald** | gRPC endpoint (default `localhost:4317`). Every `create()`/`operate()` call sends an OTLP span here. |
 | **OTel Collector** | gRPC endpoint (default `localhost:4319`). Required for OTLP log shipping — the herald handles traces only. |
 | **Log delivery** | Sidecar mode (default) or OTLP mode — see [Structured Logging](#6-structured-logging). |
 
 > In both modes your pipeline makes no HTTP calls and no direct database calls. All telemetry flows through gRPC.
 
-> **Two endpoints, not one.** The gateway (`4317`) handles entity traces. The OTel Collector (`4319`) handles logs. The `setup()` function wires both with a single `service_name` — use it unless you need fine-grained control.
+> **Two endpoints, not one.** The herald (`4317`) handles entity traces. The OTel Collector (`4319`) handles logs. The `setup()` function wires both with a single `service_name` — use it unless you need fine-grained control.
 
 ### Stack components
 
 | Service | Role | Default port |
 |---|---|---|
-| **Gateway** | Receives OTLP spans, writes entities + events to TimescaleDB, forwards to OTel Collector | `4317` gRPC, `8080` HTTP |
+| **Herald** | Receives OTLP spans, writes entities + events to TimescaleDB, forwards to OTel Collector | `4317` gRPC, `8080` HTTP |
 | **TimescaleDB** | Stores entities, provenance DAG, events, and operation records | `5432` |
 | **OTel Collector** | Receives forwarded traces and logs, exports to Tempo and Loki | internal |
 | **Tempo** | Distributed trace storage | `3201` |
 | **Loki** | Log aggregation | `3101` |
-| **Prometheus** | Metrics — gateway throughput, error rates, DB latency | `9091` |
+| **Prometheus** | Metrics — herald throughput, error rates, DB latency | `9091` |
 | **Grafana** | Dashboard UI — Entity Inspector, Error Entities, Platform Health | `3001` |
 
 All services are included in the reference `docker-compose.yml`.
@@ -75,7 +75,7 @@ When auth is enabled, your pipeline exchanges a credential for a short-lived Hel
 ### How it works
 
 1. At startup, the library calls `POST /auth/token` with your credential.
-2. The gateway validates it against the instrument's configured auth backend (token introspection or pre-shared secret).
+2. The herald validates it against the instrument's configured auth backend (token introspection or pre-shared secret).
 3. A 24-hour HelixObs JWT is returned and attached to every subsequent OTLP export.
 4. The library auto-refreshes the token 1 hour before it expires, so long-running pipeline processes stay authenticated without restarting.
 
@@ -178,7 +178,7 @@ The recommended entry point. Configures logging and returns a ready-to-use `Inst
 |---|---|---|---|
 | `service_name` | `str` | — | OTel service name for traces and logs. e.g. `"chime.l1"` |
 | `instrument_id` | `str` | — | Instrument identifier stamped on every entity span |
-| `endpoint` | `str` | `"localhost:4317"` | Gateway gRPC address for traces |
+| `endpoint` | `str` | `"localhost:4317"` | Herald gRPC address for traces |
 | `insecure` | `bool` | `True` | Plaintext gRPC |
 | `otlp` | `bool` | `False` | Ship logs via OTLP. When `False`, JSON is written to stdout |
 | `log_endpoint` | `str \| None` | `None` | OTel Collector gRPC address for logs. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` env var, then `http://localhost:4319` |
@@ -241,7 +241,7 @@ def detect(item):
 
 ### `tel.operate(operation, *, entity_id) → Token`
 
-Return a `Token` for an operation on an existing entity. Always starts a new root OTel trace independent of the entity's creation trace. The gateway writes an `entity_operations` row so the Entity Inspector shows all traces for that entity across its lifetime.
+Return a `Token` for an operation on an existing entity. Always starts a new root OTel trace independent of the entity's creation trace. The herald writes an `entity_operations` row so the Entity Inspector shows all traces for that entity across its lifetime.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -354,7 +354,7 @@ with tel.create("aggregator", id=result_id, parents=[f"part-{p}" for p in partit
     result = aggregate(partition_ids)
 ```
 
-The gateway resolves all parent IDs into OTel span links, so Tempo shows the full DAG.
+The herald resolves all parent IDs into OTel span links, so Tempo shows the full DAG.
 
 ### Post-creation operations
 
@@ -629,7 +629,7 @@ An entity can have any number of operation rows. Data is retained for 90 days an
 my_pipeline.py — HelixObs integration example.
 
 Environment:
-    GATEWAY_ENDPOINT             gRPC address of the HelixObs herald (default: localhost:4317)
+    HERALD_ENDPOINT             gRPC address of the HelixObs herald (default: localhost:4317)
     OTEL_EXPORTER_OTLP_ENDPOINT  gRPC address of the OTel Collector for log shipping
                                  (default: http://localhost:4319)
 """
@@ -648,7 +648,7 @@ log = logging.getLogger("my.pipeline")
 tel = setup(
     "my-instrument.pipeline",
     instrument_id="MY_INSTRUMENT",
-    endpoint=os.environ.get("GATEWAY_ENDPOINT", "localhost:4317"),
+    endpoint=os.environ.get("HERALD_ENDPOINT", "localhost:4317"),
     otlp=True,
 )
 
@@ -736,4 +736,4 @@ def archive_and_distribute(result_id: str) -> None:
 |---|---|---|
 | **Entity Inspector** | `http://localhost:3001/d/helix-entity-inspector` | Provenance DAG, metadata, events, span tree, and correlated logs for any entity ID |
 | **Error Entities** | `http://localhost:3001/d/helix-error-entities` | Table of all failed entities with error rate chart |
-| **Platform Health** | `http://localhost:3001/d/helix-platform-health` | Gateway throughput, DB write latency, trace store, backend health |
+| **Platform Health** | `http://localhost:3001/d/helix-platform-health` | Herald throughput, DB write latency, trace store, backend health |

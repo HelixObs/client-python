@@ -46,7 +46,7 @@ with tel.create("detector", id=product_id, parents=[frame_id]) as token:
 
 | Endpoint | Default port | Purpose |
 |---|---|---|
-| HelixObs Gateway | `4317` | OTLP traces — entity spans |
+| HelixObs Herald | `4317` | OTLP traces — entity spans |
 | OTel Collector | `4319` | OTLP logs — structured log shipping |
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://<host>:4319` for log shipping, or pass `log_endpoint` to `setup()`.
