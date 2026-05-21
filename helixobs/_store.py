@@ -2,7 +2,7 @@
 In-process trace store: entity_id → OTel SpanContext.
 
 Used to resolve parent entity IDs into OTel span links when a child entity
-is created in the same process.  For cross-process parents, the gateway
+is created in the same process.  For cross-process parents, the herald
 resolves them server-side using the helix.parent.ids span attribute.
 """
 

@@ -27,7 +27,7 @@ def _make_provider(credential, *, token="tok", expires_in=86400):
     response = _mock_response(token=token, expires_in=expires_in)
     with mock.patch("urllib.request.urlopen", return_value=response) as m:
         provider = _TokenProvider(
-            auth_endpoint="https://gateway.example.com/auth/token",
+            auth_endpoint="https://herald.example.com/auth/token",
             instrument_id="TESTINST",
             credential=credential,
         )
@@ -166,7 +166,7 @@ class TestTokenCaching:
 
 class TestTokenProviderInitFailure:
     def test_raises_if_auth_endpoint_unreachable(self):
-        """_TokenProvider must fail fast at init if the gateway is unreachable."""
+        """_TokenProvider must fail fast at init if the herald is unreachable."""
         import urllib.error
         with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
             with pytest.raises(urllib.error.URLError):

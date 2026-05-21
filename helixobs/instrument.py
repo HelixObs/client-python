@@ -27,12 +27,12 @@ Non-blocking guarantee
 ──────────────────────
 start() / complete() / error() never perform network I/O on the calling
 thread.  All OTLP exports happen in the BatchSpanProcessor background
-thread.  If the gateway is unreachable, spans queue locally and retry.
+thread.  If the herald is unreachable, spans queue locally and retry.
 
 Parent resolution
 ─────────────────
 Known parents (same process) become OTel span Links.  Unknown parents are
-set as helix.parent.ids; the gateway resolves them server-side.
+set as helix.parent.ids; the herald resolves them server-side.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ from ._store import TraceStore
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
 class _TokenProvider:
-    """Fetches and caches a HelixObs JWT from the gateway auth endpoint.
+    """Fetches and caches a HelixObs JWT from the herald auth endpoint.
 
     Thread-safe. Refreshes the token proactively 1h before expiry so
     long-running pipeline processes always have a valid credential.
@@ -72,7 +72,7 @@ class _TokenProvider:
         self._token: str = ""
         self._expires_at: float = 0.0
         self._lock = threading.Lock()
-        self._refresh()  # fail-fast: raises immediately if gateway is unreachable
+        self._refresh()  # fail-fast: raises immediately if herald is unreachable
 
     def token(self) -> str:
         """Return a valid JWT, refreshing if within 1h of expiry."""
@@ -243,7 +243,7 @@ class Instrument:
     instrument_id:
         Instrument identifier stamped on every entity span.
     endpoint:
-        OTLP gRPC endpoint of the HelixObs gateway.
+        OTLP gRPC endpoint of the HelixObs herald.
     insecure:
         Use plaintext gRPC. True for on-prem deployments without TLS.
     """
@@ -266,16 +266,16 @@ class Instrument:
         instrument_id:
             Instrument identifier stamped on every entity span.
         endpoint:
-            OTLP gRPC endpoint of the HelixObs gateway (host:port).
+            OTLP gRPC endpoint of the HelixObs herald (host:port).
         insecure:
-            Use plaintext gRPC (True = Phase 1). Set False when the gateway
+            Use plaintext gRPC (True = Phase 1). Set False when the herald
             is TLS-terminated (Phase 2 / Caddy in front of gRPC port).
         credential:
             Registration secret or existing instrument JWT. When set, the
             client exchanges it for a short-lived HelixObs JWT via auth_endpoint
             and attaches it to every OTLP export.
         auth_endpoint:
-            Full URL of the gateway POST /auth/token endpoint, e.g.
+            Full URL of the herald POST /auth/token endpoint, e.g.
             "https://206-12-91-148.cloud.computecanada.ca/auth/token".
             Required when credential is set.
         process_name:

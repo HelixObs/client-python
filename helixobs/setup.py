@@ -43,7 +43,7 @@ def setup(
         Required when using the base ``Instrument`` class. Omit when using a
         domain subclass that hard-codes its own ID (e.g. ``CHIMEInstrument``).
     endpoint:
-        OTLP gRPC endpoint of the HelixObs gateway for traces.
+        OTLP gRPC endpoint of the HelixObs herald for traces.
         Default: ``"localhost:4317"``
     insecure:
         Use plaintext gRPC. Default: ``True``
@@ -57,10 +57,10 @@ def setup(
     credential:
         Registration secret or existing instrument JWT. When set, the client
         fetches a short-lived HelixObs JWT from ``auth_endpoint`` at startup
-        and attaches it to every OTLP export. Required when the gateway has
+        and attaches it to every OTLP export. Required when the herald has
         ``JWT_SECRET`` set. Omit for dev/local stacks without auth enforcement.
     auth_endpoint:
-        Full URL of the gateway ``POST /auth/token`` endpoint. Required when
+        Full URL of the herald ``POST /auth/token`` endpoint. Required when
         ``credential`` is set. e.g.
         ``"https://206-12-91-148.cloud.computecanada.ca/auth/token"``
     instrument_class:
@@ -79,11 +79,11 @@ def setup(
         from helixobs import setup
 
         # Base Instrument — instrument_id required
-        tel = setup("my.pipeline", instrument_id="MY_INST", endpoint="gateway:4317", otlp=True)
+        tel = setup("my.pipeline", instrument_id="MY_INST", endpoint="herald:4317", otlp=True)
 
         # Domain subclass — instrument_id owned by the class, not the caller
         from chime import CHIMEInstrument
-        tel = setup("chime.simulator", endpoint="gateway:4317",
+        tel = setup("chime.simulator", endpoint="herald:4317",
                     otlp=True, instrument_class=CHIMEInstrument)
     """
     import os

@@ -1,6 +1,6 @@
 # tests
 
-Unit tests for the helixobs Python client. No real gateway or network required — all tests use `InMemorySpanExporter`.
+Unit tests for the helixobs Python client. No real herald or network required — all tests use `InMemorySpanExporter`.
 
 ## Fixtures (conftest.py)
 

@@ -130,7 +130,7 @@ class TestParentResolution:
 
         child_span = next(s for s in finished_spans(exporter) if s.name == "clustering")
         assert len(child_span.links) == 1
-        # All parent entity IDs are in the attribute so the gateway can persist
+        # All parent entity IDs are in the attribute so the herald can persist
         # the full provenance DAG — not just the unresolved ones.
         assert child_span.attributes["helix.parent.ids"] == "block-1,cand-cross"
 

@@ -11,7 +11,7 @@ Core library code. Entry point is `Instrument` in `instrument.py`.
 
 ## Attribute contract with the herald
 
-The gateway extracts these attributes from every incoming span:
+The herald extracts these attributes from every incoming span:
 
 ```
 helix.entity.id          string   entity ID (required — triggers HelixObs processing)
