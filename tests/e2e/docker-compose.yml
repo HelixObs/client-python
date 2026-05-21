@@ -1,11 +1,11 @@
 name: helixobs-e2e-client
 
 # Minimal stack for client-python e2e tests.
-# The gateway image must be pre-built before running:
+# The herald image must be pre-built before running:
 #
-#   docker build -t helixobs-gateway <path-to-gateway-repo>
+#   docker build -t helixobs-herald <path-to-herald-repo>
 #
-# In CI this is done by the e2e workflow after checking out the gateway repo.
+# In CI this is done by the e2e workflow after checking out the herald repo.
 
 volumes:
   db-data:
@@ -22,13 +22,13 @@ services:
       POSTGRES_DB:       helixobs
     volumes:
       - db-data:/var/lib/postgresql/data
-      # Migration SQL path is relative to the repo root, set via GATEWAY_REPO env var
-      # in CI; locally, set GATEWAY_MIGRATIONS_DIR to point at your gateway checkout.
-      - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
-      - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/003_trace_dedup.sql:/docker-entrypoint-initdb.d/003_trace_dedup.sql:ro
-      - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/005_entity_events_trace_id.sql:/docker-entrypoint-initdb.d/005_entity_events_trace_id.sql:ro
-      - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/006_operation_duration.sql:/docker-entrypoint-initdb.d/006_operation_duration.sql:ro
-      - ${GATEWAY_MIGRATIONS_DIR:-../../../gateway/migrations}/007_entity_events_error_index.sql:/docker-entrypoint-initdb.d/007_entity_events_error_index.sql:ro
+      # Migration SQL path is relative to the repo root, set via HERALD_REPO env var
+      # in CI; locally, set HERALD_MIGRATIONS_DIR to point at your herald checkout.
+      - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/003_trace_dedup.sql:/docker-entrypoint-initdb.d/003_trace_dedup.sql:ro
+      - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/005_entity_events_trace_id.sql:/docker-entrypoint-initdb.d/005_entity_events_trace_id.sql:ro
+      - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/006_operation_duration.sql:/docker-entrypoint-initdb.d/006_operation_duration.sql:ro
+      - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/007_entity_events_error_index.sql:/docker-entrypoint-initdb.d/007_entity_events_error_index.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
@@ -45,10 +45,10 @@ services:
       - ./otel-collector-config.yml:/etc/otel/config.yml:ro
     networks: [e2e]
 
-  gateway:
-    image: helixobs-gateway
+  herald:
+    image: helixobs-herald
     environment:
-      GATEWAY_ADDR:       ":4317"
+      HERALD_ADDR:        ":4317"
       COLLECTOR_ENDPOINT: "otel-collector:4317"
       DB_URL:             "postgres://helix:helix@db:5432/helixobs"
       METRICS_ADDR:       ":2112"

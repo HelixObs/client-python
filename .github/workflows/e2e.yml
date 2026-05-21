@@ -12,15 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4   # client-python at ./
 
-      - name: Check out gateway repo
+      - name: Check out herald repo
         uses: actions/checkout@v4
         with:
-          repository: HelixObs/gateway
-          path: gateway-repo
+          repository: HelixObs/herald
+          path: herald-repo
           token: ${{ secrets.GH_PAT }}
 
-      - name: Build gateway image
-        run: docker build -t helixobs-gateway gateway-repo/
+      - name: Build herald image
+        run: docker build -t helixobs-herald herald-repo/
 
       - uses: actions/setup-python@v5
         with:
@@ -32,14 +32,14 @@ jobs:
 
       - name: Start stack
         run: |
-          GATEWAY_MIGRATIONS_DIR=${{ github.workspace }}/gateway-repo/migrations \
+          HERALD_MIGRATIONS_DIR=${{ github.workspace }}/herald-repo/migrations \
             docker compose -f tests/e2e/docker-compose.yml up -d --wait
         timeout-minutes: 10
 
       - name: Run e2e tests
         run: pytest -v -m e2e tests/e2e/
         env:
-          GATEWAY_ENDPOINT: "localhost:4317"
+          HERALD_ENDPOINT: "localhost:4317"
           METRICS_URL:      "http://localhost:2112/metrics"
           TEST_DB_URL:      "host=localhost port=5432 dbname=helixobs user=helix password=helix sslmode=disable"
 

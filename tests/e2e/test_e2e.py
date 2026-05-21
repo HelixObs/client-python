@@ -4,8 +4,8 @@ End-to-end tests for the helixobs Python client.
 Requires the stack in tests/e2e/docker-compose.yml to be running.
 Run via the e2e CI workflow or locally:
 
-    docker build -t helixobs-gateway ../../../gateway
-    GATEWAY_MIGRATIONS_DIR=../../../gateway/migrations \\
+    docker build -t helixobs-herald ../../../herald
+    HERALD_MIGRATIONS_DIR=../../../herald/migrations \\
         docker compose -f tests/e2e/docker-compose.yml up -d --wait
     pytest -v -m e2e tests/e2e/
     docker compose -f tests/e2e/docker-compose.yml down -v
@@ -23,7 +23,7 @@ from helixobs.instrument import Instrument
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-GATEWAY_ENDPOINT = os.environ.get("GATEWAY_ENDPOINT", "localhost:4317")
+HERALD_ENDPOINT  = os.environ.get("HERALD_ENDPOINT",  "localhost:4317")
 METRICS_URL      = os.environ.get("METRICS_URL",      "http://localhost:2112/metrics")
 DB_DSN           = os.environ.get("TEST_DB_URL",
                                   "host=localhost port=5432 dbname=helixobs "
@@ -32,8 +32,8 @@ DB_DSN           = os.environ.get("TEST_DB_URL",
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="session", autouse=True)
-def wait_for_gateway():
-    """Block until the gateway metrics endpoint responds."""
+def wait_for_herald():
+    """Block until the herald metrics endpoint responds."""
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         try:
@@ -41,7 +41,7 @@ def wait_for_gateway():
                 return
         except Exception:
             time.sleep(0.5)
-    pytest.fail("Gateway did not become ready within 30 s")
+    pytest.fail("Herald did not become ready within 30 s")
 
 
 @pytest.fixture(scope="session")
@@ -54,11 +54,11 @@ def db():
 
 @pytest.fixture
 def instrument():
-    """A real Instrument connected to the e2e gateway. Flushes on teardown."""
+    """A real Instrument connected to the e2e herald. Flushes on teardown."""
     inst = Instrument(
         service_name="e2e-test",
         instrument_id="E2E",
-        endpoint=GATEWAY_ENDPOINT,
+        endpoint=HERALD_ENDPOINT,
         insecure=True,
     )
     yield inst
