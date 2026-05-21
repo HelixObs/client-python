@@ -505,9 +505,11 @@ With the context manager pattern this is automatic — the span stays active for
 | `otel_span_id` | Active OTel span | 16-hex span ID |
 | `exc` | Exception info | Only present when `log.exception()` / `exc_info=True` |
 
-> `helix_entity_id` is **not** a Loki stream label — one stream per entity would exhaust Loki's stream limit. Query entity logs with `| json | helix_entity_id = "..."` at query time.
+> `helix_entity_id` is **not** a Loki stream label — one stream per entity would exhaust Loki's stream limit. It is stored as structured metadata instead and is queryable via `| helix_entity_id = \`...\`` without `| json`.
 
 **Sidecar mode log collector (Grafana Alloy reference):**
+
+The following `loki.process` pipeline is required for the HelixObs Grafana dashboards (Entity Inspector and Pipeline Process Logs) to work correctly with sidecar-delivered logs. Without `stage.structured_metadata`, the entity inspector cannot filter logs by entity ID or trace ID. Without `helix_process_name` in `stage.labels`, the pipeline logs dashboard process selector has no data.
 
 ```alloy
 loki.source.docker "containers" {
@@ -517,8 +519,35 @@ loki.source.docker "containers" {
 }
 
 loki.process "helix_json" {
-  stage.json { expressions = { helix_instrument_id = "", level = "" } }
-  stage.labels { values = { helix_instrument_id = "", level = "" } }
+  stage.json {
+    expressions = {
+      helix_instrument_id = "helix_instrument_id",
+      helix_process_name  = "helix_process_name",
+      level               = "level",
+      helix_entity_id     = "helix_entity_id",
+      otel_trace_id       = "otel_trace_id",
+    }
+  }
+
+  // Low-cardinality fields only — helix_entity_id must NOT be a stream label.
+  stage.labels {
+    values = {
+      helix_instrument_id = "",
+      helix_process_name  = "",
+      level               = "",
+    }
+  }
+
+  // Promote entity ID and trace ID as structured metadata so Grafana dashboard
+  // queries (| helix_entity_id = `...` and | trace_id = `...`) work the same
+  // way as for OTLP-delivered logs.
+  stage.structured_metadata {
+    values = {
+      helix_entity_id = "",
+      trace_id        = "otel_trace_id",
+    }
+  }
+
   forward_to = [loki.write.default.receiver]
 }
 
