@@ -136,6 +136,18 @@ class TestSourceLocation:
         )
         assert "#L" in record.helix_source
 
+    def test_src_no_github_permalink_for_site_packages(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_REPO",    "https://github.com/HelixObs/client-python")
+        monkeypatch.setenv("GIT_COMMIT_SHA", "abc123")
+        helix_logging.configure_logging()
+        record = logging.getLogger("test").makeRecord(
+            "test", logging.INFO,
+            "/usr/lib/python3.13/site-packages/numpy/core/fromnumeric.py",
+            42, "msg", (), None,
+        )
+        assert "github.com" not in record.helix_source
+        assert "numpy/core/fromnumeric.py#L42" in record.helix_source
+
     def test_src_trailing_slash_stripped_from_repo_url(self, monkeypatch):
         monkeypatch.setenv("GITHUB_REPO",    "https://github.com/HelixObs/client-python/")
         monkeypatch.setenv("GIT_COMMIT_SHA", "sha1")

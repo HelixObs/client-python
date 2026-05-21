@@ -253,7 +253,8 @@ def _install_factory() -> None:
         record.helix_process_name = _process_name
 
         rel = _normalize_path(record.pathname, record.filename)
-        if github_repo:
+        is_external = bool(_SITE_PKGS_RE.search(record.pathname))
+        if github_repo and not is_external:
             record.helix_source = f"{github_repo}/blob/{git_ref}/{rel}#L{record.lineno}"
         else:
             record.helix_source = f"{rel}#L{record.lineno}"
