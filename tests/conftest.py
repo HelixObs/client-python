@@ -1,7 +1,7 @@
 """
 Shared fixtures for helixobs tests.
 
-Uses InMemorySpanExporter so tests never need a real gateway.
+Uses InMemorySpanExporter so tests never need a real herald.
 Each test gets a fresh TracerProvider and Instrument to prevent state leakage.
 """
 
