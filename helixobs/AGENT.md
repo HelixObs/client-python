@@ -22,15 +22,57 @@ helix.entity.is_operation string  "true" → write entity_operations row, not en
 
 Do not rename these without updating the herald interceptor constants (`attrEntityID`, etc.).
 
-## Entity vs Operation
+## Entity vs Operation vs Plain Trace
 
-| | `create()` | `operate()` |
-|---|---|---|
-| Creates entity row | Yes | No (upserts placeholder if missing) |
-| Creates operation row | No | Yes |
-| Overwrites TraceStore | Yes | No |
-| OTel trace | New root (or linked) | New root (always blank context) |
-| Use when | Entity comes into being | Work done on an existing entity |
+| | `create()` | `operate()` | `trace()` |
+|---|---|---|---|
+| Creates entity row | Yes | No (upserts placeholder if missing) | No |
+| Creates operation row | No | Yes | No |
+| Overwrites TraceStore | Yes | No | No |
+| OTel trace | New root (or linked) | New root (blank context) | Inherits current context |
+| Herald processing | entity write | entity_operations write | passthrough |
+| Use when | Entity comes into being | Work done on an existing entity | Infrastructure work with no entity |
+
+## Deferred entity_id on operate()
+
+`entity_id` is optional on `operate()`. When omitted, the span starts immediately (covering
+all pre-discovery work) and `helix.entity.id` is set later once the entity is known:
+
+```python
+with tel.operate("stage-replication", site=SITE) as operation:
+    file_replicas = await fetch_replicas(...)   # logged under this trace
+    if not file_replicas:
+        return []                               # span closes with no entity_id → passthrough
+    dataset_name = await resolve_dataset(...)
+    operation.set_entity_id(dataset_name)       # now linked to the entity
+    deposit(work)
+```
+
+If the span closes without `entity_id` ever being set, a `WARNING` is logged and the span
+is forwarded by the herald as a plain OTel trace (no `entity_operations` row written). This
+is intentional for early-exit paths (queue full, nothing to process).
+
+`set_attribute("helix.entity.id", value)` is equivalent to `set_entity_id(value)` and
+also suppresses the warning.
+
+## tel.trace() — plain OTel spans
+
+For infrastructure work that has no entity (HTTP handlers, background loops, retry daemons),
+use `tel.trace()` instead of importing the raw OTel tracer:
+
+```python
+with tel.trace("handle-request", attributes={"method": "POST"}) as span:
+    with tel.child_span("validate-payload"):
+        ...
+    with tel.child_span("query-db"):
+        ...
+```
+
+All child spans created via `tel.child_span()` inside a `tel.trace()` block automatically
+inherit the trace context — they share the same `otelTraceID` and appear nested in Tempo.
+The herald forwards `tel.trace()` spans unchanged (no `helix.entity.id` → passthrough).
+Logs emitted inside get `otelTraceID` and `otelSpanID` injected by the log factory, making
+them filterable by trace ID in Loki.
 
 ## Adding new integration layers or helpers
 

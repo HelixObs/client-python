@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import threading
 import time
 import urllib.request
@@ -132,7 +133,7 @@ class Token:
         self,
         instrument: "Instrument",
         stage_name: str,
-        entity_id: Union[str, Callable],
+        entity_id: Union[str, Callable, None],
         parents: Union[list, Callable],
         is_operation: bool,
     ) -> None:
@@ -144,6 +145,7 @@ class Token:
         self._span = None
         self._ctx_token = None
         self._done = False
+        self._entity_id_resolved = entity_id is not None
 
     # ── Span lifecycle ────────────────────────────────────────────────
 
@@ -161,6 +163,10 @@ class Token:
         if self._done:
             return
         self._done = True
+        if self._is_operation and not self._entity_id_resolved:
+            logging.getLogger(__name__).warning(
+                "operate() completed without entity_id — span will not be linked to any entity"
+            )
         if metadata:
             for k, v in metadata.items():
                 self._span.set_attribute(k, str(v))
@@ -180,7 +186,14 @@ class Token:
 
     # ── Attribute / event helpers ─────────────────────────────────────
 
+    def set_entity_id(self, entity_id: str) -> None:
+        """Set the entity ID mid-operation, once it becomes known."""
+        self._entity_id_resolved = True
+        self._span.set_attribute(_ATTR_ENTITY_ID, str(entity_id))
+
     def set_attribute(self, key: str, value) -> None:
+        if key == _ATTR_ENTITY_ID:
+            self._entity_id_resolved = True
         self._span.set_attribute(key, str(value))
 
     def add_error(self, metadata: dict | None = None) -> None:
@@ -363,7 +376,8 @@ class Instrument:
             ctx = None
 
         span = self._tracer.start_span(stage_name, context=ctx, links=links)
-        span.set_attribute(_ATTR_ENTITY_ID, entity_id)
+        if entity_id is not None:
+            span.set_attribute(_ATTR_ENTITY_ID, entity_id)
         span.set_attribute(_ATTR_INSTRUMENT_ID, self.instrument_id)
         if parent_ids:
             span.set_attribute(_ATTR_PARENT_IDS, ",".join(parent_ids))
@@ -396,10 +410,32 @@ class Instrument:
         self,
         operation: str,
         *,
-        entity_id: Union[str, Callable],
+        entity_id: Union[str, Callable, None] = None,
     ) -> Token:
         """Return a Token for an operation on an existing entity."""
         return Token(self, operation, entity_id, [], is_operation=True)
+
+    # ── Plain traces ──────────────────────────────────────────────────
+
+    def trace(self, name: str, *, attributes: dict | None = None):
+        """Context manager for a plain OTel span with no entity semantics.
+
+        Use for infrastructure work (HTTP handlers, background loops) where
+        you want log correlation by trace ID but have no entity to track.
+        The herald forwards the span unchanged.
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _inner():
+            with self._tracer.start_as_current_span(name) as span:
+                span.set_attribute(_ATTR_INSTRUMENT_ID, self.instrument_id)
+                if attributes:
+                    for k, v in attributes.items():
+                        span.set_attribute(k, str(v))
+                yield span
+
+        return _inner()
 
     # ── Child spans ───────────────────────────────────────────────────
 

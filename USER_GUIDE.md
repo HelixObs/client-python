@@ -10,7 +10,7 @@ HelixObs gives scientific instrument pipelines entity-centric observability: eve
 2. [Installation](#2-installation)
 3. [Authentication](#3-authentication)
 4. [Core Concepts](#4-core-concepts)
-5. [API Reference](#5-api-reference)
+5. [API Reference](#5-api-reference) — `create`, `operate` (incl. deferred entity ID), `trace`, `child_span`, `Token` methods
 6. [Integration Patterns](#6-integration-patterns)
 7. [Structured Logging](#7-structured-logging)
 8. [Data Model](#8-data-model)
@@ -239,14 +239,14 @@ def detect(item):
 
 ---
 
-### `tel.operate(operation, *, entity_id) → Token`
+### `tel.operate(operation, *, entity_id=None) → Token`
 
 Return a `Token` for an operation on an existing entity. Always starts a new root OTel trace independent of the entity's creation trace. The herald writes an `entity_operations` row so the Entity Inspector shows all traces for that entity across its lifetime.
 
-| Parameter | Type | Description |
-|---|---|---|
-| `operation` | `str` | Operation name shown in Tempo and the Entity Inspector |
-| `entity_id` | `str` | ID of the existing entity being operated on |
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `operation` | `str` | — | Operation name shown in Tempo and the Entity Inspector |
+| `entity_id` | `str \| None` | `None` | ID of the existing entity being operated on |
 
 ```python
 with tel.operate("archival", entity_id=result_id) as op:
@@ -256,6 +256,20 @@ with tel.operate("archival", entity_id=result_id) as op:
 ```
 
 Unhandled exceptions inside the `with` block automatically call `op.error()`.
+
+**Deferred entity ID.** `entity_id` is optional. Omit it to open the trace immediately — before the entity is known — then call `op.set_entity_id(id)` once it is discovered mid-operation. All logs and child spans emitted before the call share the same trace ID, so they are reachable from the Entity Inspector via that trace.
+
+```python
+with tel.operate("stage-replication") as op:
+    replicas = await fetch_replicas(storage_id)   # logged under this trace
+    if not replicas:
+        return                                     # no entity_id → passthrough trace
+    dataset_name = await resolve_dataset(replicas)
+    op.set_entity_id(dataset_name)                # now linked to the entity
+    await deposit_work(replicas)
+```
+
+If the span closes without `entity_id` ever being set, a `WARNING` is logged and the span is forwarded as a plain OTel trace — no `entity_operations` row is written. This is the correct behaviour for early-exit paths (queue full, nothing to process).
 
 ---
 
@@ -268,7 +282,8 @@ Unhandled exceptions inside the `with` block automatically call `op.error()`.
 | `token.error(metadata=None)` | Record a `helix.error` span event, set span status to ERROR, and **end the span**. No-op after first call. |
 | `token.add_error(metadata=None)` | Record a `helix.error` span event and set span status to ERROR **without ending the span**. Use for recoverable failures where the operation should continue. |
 | `token.add_event(name, attributes=None)` | Attach a timestamped `helix.*` event. Written to `entity_events` by the herald. |
-| `token.set_attribute(key, value)` | Set a span attribute directly. |
+| `token.set_entity_id(entity_id)` | Set the entity ID mid-operation. Use with deferred `entity_id` — see `tel.operate()`. |
+| `token.set_attribute(key, value)` | Set a span attribute directly. Setting `helix.entity.id` via this method is equivalent to `set_entity_id()`. |
 
 ---
 
@@ -295,6 +310,27 @@ with tel.child_span("signal-processing") as span:
 
 token.complete()
 ```
+
+---
+
+### `tel.trace(name, *, attributes=None)`
+
+Create a plain OTel span with no entity semantics. Use for infrastructure work — HTTP handlers, background loops, retry daemons — where you want log correlation by trace ID but have no entity to track. The herald forwards the span unchanged.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | `str` | Span name shown in Tempo |
+| `attributes` | `dict \| None` | Span attributes to set immediately |
+
+```python
+with tel.trace("handle-request", attributes={"method": "POST", "path": "/api/ingest"}):
+    with tel.child_span("validate-payload"):
+        validate(request)
+    with tel.child_span("write-db"):
+        write(request)
+```
+
+All `tel.child_span()` calls inside a `tel.trace()` block automatically inherit the trace context — they share the same `otelTraceID` and appear nested under the root span in Tempo. Log lines emitted anywhere inside the block carry `otel_trace_id`, making them filterable by trace in Loki without needing any entity ID.
 
 ---
 
@@ -377,6 +413,46 @@ for site in ["site-a", "site-b"]:
             log.error(f"replication to {site} timed out")
             op.error({"message": "replication_timeout", "dest": site})
 ```
+
+### Operations where the entity is discovered mid-execution
+
+Some pipelines don't know which entity they're operating on until after fetching work from a queue or database. Open `tel.operate()` without an entity ID so the entire operation — including the discovery work — is captured in one trace, then call `op.set_entity_id()` once the entity is known.
+
+```python
+with tel.operate("stage-deletion") as op:
+    # queue check and DB fetch are inside this trace
+    if queue.is_full():
+        log.info("queue full, skipping")
+        return                              # trace closes without entity_id → passthrough
+
+    dataset = await fetch_next_dataset()
+    if dataset is None:
+        log.info("nothing to delete")
+        return                              # same — early exit, no entity linked
+
+    op.set_entity_id(dataset.name)          # all subsequent logs carry this entity's trace
+
+    replicas = await fetch_replicas(dataset.id)
+    await stage_deletion_work(replicas)
+    op.add_event("helix.event.deletion-staged", {"num_replicas": str(len(replicas))})
+```
+
+The story in the Entity Inspector: "During trace `abc123` the pipeline operated on entity `dataset-x`." All logs from the trace — including those emitted before `set_entity_id()` was called — are reachable from the entity's operation row by following its `trace_id` link to Loki.
+
+### Plain traces for infrastructure work
+
+Use `tel.trace()` for work that has no entity — HTTP servers, periodic health checks, daemon loops — where you want log correlation by trace ID without any entity machinery.
+
+```python
+with tel.trace("process-request", attributes={"endpoint": "/api/status"}):
+    with tel.child_span("auth-check"):
+        verify_token(request)
+    with tel.child_span("db-query"):
+        result = db.query(...)
+    log.info("request complete")    # otel_trace_id present → filterable in Loki
+```
+
+This is equivalent to using the raw OpenTelemetry tracer directly, but keeps the `tel` object as the single import — no `from opentelemetry import trace` needed.
 
 ### Recoverable failures
 

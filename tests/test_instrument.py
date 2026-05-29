@@ -402,6 +402,115 @@ class TestOperate:
                 raise ValueError("voevent_parse_error")
 
 
+# ── operate() with deferred entity_id ────────────────────────────────────────
+
+class TestOperateDeferred:
+    def test_operate_without_entity_id_produces_span(self, instrument, exporter):
+        with instrument.operate("stage-replication"):
+            pass
+        assert len(finished_spans(exporter)) == 1
+
+    def test_operate_without_entity_id_has_no_entity_id_attribute(self, instrument, exporter):
+        with instrument.operate("stage-replication"):
+            pass
+        span = finished_spans(exporter)[0]
+        assert "helix.entity.id" not in span.attributes
+
+    def test_operate_without_entity_id_still_sets_is_operation(self, instrument, exporter):
+        with instrument.operate("stage-replication"):
+            pass
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("helix.entity.is_operation") == "true"
+
+    def test_set_entity_id_sets_attribute_on_span(self, instrument, exporter):
+        with instrument.operate("stage-replication") as op:
+            op.set_entity_id("dataset-x")
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("helix.entity.id") == "dataset-x"
+
+    def test_set_entity_id_suppresses_warning(self, instrument, exporter, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING, logger="helixobs.instrument"):
+            with instrument.operate("stage-replication") as op:
+                op.set_entity_id("dataset-x")
+        assert "without entity_id" not in caplog.text
+
+    def test_set_attribute_entity_id_resolves(self, instrument, exporter, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING, logger="helixobs.instrument"):
+            with instrument.operate("stage-replication") as op:
+                op.set_attribute("helix.entity.id", "dataset-y")
+        assert "without entity_id" not in caplog.text
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("helix.entity.id") == "dataset-y"
+
+    def test_missing_entity_id_on_close_logs_warning(self, instrument, exporter, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING, logger="helixobs.instrument"):
+            with instrument.operate("stage-replication"):
+                pass
+        assert "without entity_id" in caplog.text
+
+
+# ── tel.trace() ───────────────────────────────────────────────────────────────
+
+class TestTrace:
+    def test_trace_produces_finished_span(self, instrument, exporter):
+        with instrument.trace("handle-request"):
+            pass
+        assert len(finished_spans(exporter)) == 1
+
+    def test_trace_span_has_correct_name(self, instrument, exporter):
+        with instrument.trace("handle-request"):
+            pass
+        assert finished_spans(exporter)[0].name == "handle-request"
+
+    def test_trace_has_no_entity_id(self, instrument, exporter):
+        with instrument.trace("handle-request"):
+            pass
+        assert "helix.entity.id" not in finished_spans(exporter)[0].attributes
+
+    def test_trace_has_no_is_operation(self, instrument, exporter):
+        with instrument.trace("handle-request"):
+            pass
+        assert "helix.entity.is_operation" not in finished_spans(exporter)[0].attributes
+
+    def test_trace_sets_instrument_id(self, instrument, exporter):
+        with instrument.trace("handle-request"):
+            pass
+        assert finished_spans(exporter)[0].attributes.get("helix.instrument.id") == "TEST"
+
+    def test_trace_with_attributes(self, instrument, exporter):
+        with instrument.trace("handle-request", attributes={"method": "POST", "path": "/api"}):
+            pass
+        span = finished_spans(exporter)[0]
+        assert span.attributes.get("method") == "POST"
+        assert span.attributes.get("path") == "/api"
+
+    def test_trace_exception_is_not_suppressed(self, instrument):
+        with pytest.raises(RuntimeError):
+            with instrument.trace("handle-request"):
+                raise RuntimeError("timeout")
+
+    def test_child_span_inside_trace_shares_trace_id(self, instrument, exporter):
+        with instrument.trace("handle-request"):
+            with instrument.child_span("validate-payload"):
+                pass
+        spans = finished_spans(exporter)
+        root = next(s for s in spans if s.name == "handle-request")
+        child = next(s for s in spans if s.name == "validate-payload")
+        assert child.context.trace_id == root.context.trace_id
+
+    def test_child_span_inside_trace_is_nested(self, instrument, exporter):
+        with instrument.trace("handle-request"):
+            with instrument.child_span("validate-payload"):
+                pass
+        spans = finished_spans(exporter)
+        root = next(s for s in spans if s.name == "handle-request")
+        child = next(s for s in spans if s.name == "validate-payload")
+        assert child.parent.span_id == root.context.span_id
+
+
 # ── Token.add_error ───────────────────────────────────────────────────────────
 
 class TestAddError:
