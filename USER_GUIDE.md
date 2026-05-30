@@ -465,7 +465,7 @@ with tel.operate("write-header", entity_id=event_id) as op:
             dump_header(event)
     except Exception as e:
         log.error(f"dump_header failed: {e}")
-        op.add_error({"stage": "dump_header", "message": str(e)})
+        op.add_error({"stage": "dump_header", "message": type(e).__name__})
         # operation continues — downstream steps still run and are recorded
     
     try:
@@ -473,7 +473,7 @@ with tel.operate("write-header", entity_id=event_id) as op:
             write_metadata(event)
     except Exception as e:
         log.error(f"write_metadata failed: {e}")
-        op.add_error({"stage": "write_metadata", "message": str(e)})
+        op.add_error({"stage": "write_metadata", "message": type(e).__name__})
 ```
 
 Use `error()` (which ends the span) only when the failure is fatal and no further work should be recorded:
@@ -485,6 +485,22 @@ with tel.operate("archival", entity_id=result_id) as op:
         return
     write_archive(result_id)
 ```
+
+> **Writing good error messages**
+>
+> The `message` field drives notification deduplication — all occurrences of the same error class must produce the same message so they converge on a single GitHub issue rather than creating one per entity.
+>
+> - **Do**: write a concise, stable description of the error kind — think "bug report title".
+>   ```python
+>   op.add_error({"message": "db_id_overflow", "stage": "dump_header"})
+>   op.add_error({"message": type(e).__name__, "stage": "dump_header"})
+>   ```
+> - **Don't**: pass `str(e)` directly when the exception string contains per-entity data (tracebacks, payloads, floating-point values). Each entity produces a unique string → a unique notification.
+>   ```python
+>   # Bad — str(e) may contain event-specific payload data:
+>   op.add_error({"message": str(e)})
+>   ```
+> - The full exception detail belongs in the **log line** (automatically correlated to this trace via `otelTraceID`) or in a separate metadata key like `"detail"`, not in `message`.
 
 ### Multi-stage pipeline
 
@@ -762,7 +778,7 @@ def process_item(frame_id: str) -> str | None:
 
     except Exception as exc:
         log.exception("processing failed")
-        token.error(metadata={"message": str(exc)})
+        token.error(metadata={"message": type(exc).__name__})
         return None
 
 
