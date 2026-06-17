@@ -185,13 +185,15 @@ def _install_otlp_handler(service_name: str) -> None:
         ) from exc
 
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+    insecure = not endpoint.startswith("https://")
+    grpc_endpoint = endpoint.removeprefix("https://").removeprefix("http://")
     resource = Resource.create({"service.name": service_name})
 
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
     provider = LoggerProvider(resource=resource)
     provider.add_log_record_processor(
-        BatchLogRecordProcessor(OTLPLogExporter(endpoint=endpoint, insecure=True))
+        BatchLogRecordProcessor(OTLPLogExporter(endpoint=grpc_endpoint, insecure=insecure))
     )
     global _log_provider
     _log_provider = provider
