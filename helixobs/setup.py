@@ -20,7 +20,7 @@ def setup(
     *,
     instrument_id: str | None = None,
     endpoint: str = "localhost:4317",
-    insecure: bool = True,
+    insecure: bool | None = None,
     otlp: bool = False,
     log_endpoint: str | None = None,
     process_name: str | None = None,
@@ -46,7 +46,8 @@ def setup(
         OTLP gRPC endpoint of the HelixObs herald for traces.
         Default: ``"localhost:4317"``
     insecure:
-        Use plaintext gRPC. Default: ``True``
+        Use plaintext gRPC. Defaults to ``False`` when endpoint port is 443,
+        ``True`` otherwise. Pass explicitly to override auto-detection.
     otlp:
         When True, ship logs via OTLP gRPC to the OTel Collector.
         When False (default), write JSON to stdout for sidecar collection.
@@ -87,6 +88,9 @@ def setup(
                     otlp=True, instrument_class=CHIMEInstrument)
     """
     import os
+
+    if insecure is None:
+        insecure = endpoint.rsplit(":", 1)[-1] != "443"
 
     if otlp and log_endpoint:
         os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", log_endpoint)
