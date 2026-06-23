@@ -199,6 +199,9 @@ def _install_otlp_handler(service_name: str) -> None:
     _log_provider = provider
     set_logger_provider(provider)
 
+    from . import _fork
+    _fork.register_provider_for_fork(provider)
+
     handler = LoggingHandler(logger_provider=provider)
     logging.getLogger().addHandler(handler)
 

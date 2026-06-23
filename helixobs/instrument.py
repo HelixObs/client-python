@@ -314,6 +314,9 @@ class Instrument:
         self._tracer = trace.get_tracer("helixobs", tracer_provider=tracer_provider)
         self._provider = tracer_provider
 
+        from . import _fork
+        _fork.register_provider_for_fork(tracer_provider)
+
         from .logging import update_log_service_name
         update_log_service_name(service_name, process_name=process_name)
 
