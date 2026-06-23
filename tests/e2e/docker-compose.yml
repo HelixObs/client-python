@@ -29,6 +29,9 @@ services:
       - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/005_entity_events_trace_id.sql:/docker-entrypoint-initdb.d/005_entity_events_trace_id.sql:ro
       - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/006_operation_duration.sql:/docker-entrypoint-initdb.d/006_operation_duration.sql:ro
       - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/007_entity_events_error_index.sql:/docker-entrypoint-initdb.d/007_entity_events_error_index.sql:ro
+      - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/009_monitor_index.sql:/docker-entrypoint-initdb.d/009_monitor_index.sql:ro
+      - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/010_entity_event_dedup.sql:/docker-entrypoint-initdb.d/010_entity_event_dedup.sql:ro
+      - ${HERALD_MIGRATIONS_DIR:-../../../herald/migrations}/010_graph_query_indexes.sql:/docker-entrypoint-initdb.d/010_graph_query_indexes.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
